@@ -162,6 +162,9 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 		}
 		enc.IsSystemTx = &itx.IsSystemTransaction
 		// other fields will show up as null.
+
+	case *RevealTx:
+		enc.Input = (*hexutil.Bytes)(&itx.Key)
 	}
 	return json.Marshal(&enc)
 }
@@ -472,6 +475,18 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		if dec.Nonce != nil {
 			inner = &depositTxWithNonce{DepositTx: itx, EffectiveNonce: uint64(*dec.Nonce)}
 		}
+
+	case RevealTxType:
+		if dec.Nonce != nil || dec.To != nil || dec.GasPrice != nil || dec.Gas != nil || dec.GasPrice != nil || dec.MaxPriorityFeePerGas != nil || dec.MaxFeePerGas != nil || dec.MaxFeePerBlobGas != nil || dec.Value != nil || dec.AccessList != nil || dec.BlobVersionedHashes != nil || dec.V != nil || dec.R != nil || dec.S != nil || dec.YParity != nil {
+			return errors.New("unexpected field(s) in reveal transaction")
+		}
+		var itx RevealTx
+		inner = &itx
+		if dec.Input == nil {
+			return errors.New("missing required field 'input' for txdata")
+		}
+		itx.Key = *dec.Input
+
 	default:
 		return ErrTxTypeNotSupported
 	}
