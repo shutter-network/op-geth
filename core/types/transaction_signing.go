@@ -264,6 +264,9 @@ func (s londonSigner) Sender(tx *Transaction) (common.Address, error) {
 			return tx.inner.(*depositTxWithNonce).From, nil
 		}
 	}
+	if tx.Type() == RevealTxType {
+		return common.Address{}, fmt.Errorf("reveal txs do not have a sender")
+	}
 	if tx.Type() != DynamicFeeTxType {
 		return s.eip2930Signer.Sender(tx)
 	}
@@ -286,6 +289,9 @@ func (s londonSigner) SignatureValues(tx *Transaction, sig []byte) (R, S, V *big
 	if tx.Type() == DepositTxType {
 		return nil, nil, nil, fmt.Errorf("deposits do not have a signature")
 	}
+	if tx.Type() == RevealTxType {
+		return nil, nil, nil, fmt.Errorf("reveal txs do not have a signature")
+	}
 	txdata, ok := tx.inner.(*DynamicFeeTx)
 	if !ok {
 		return s.eip2930Signer.SignatureValues(tx, sig)
@@ -305,6 +311,9 @@ func (s londonSigner) SignatureValues(tx *Transaction, sig []byte) (R, S, V *big
 func (s londonSigner) Hash(tx *Transaction) common.Hash {
 	if tx.Type() == DepositTxType {
 		panic("deposits cannot be signed and do not have a signing hash")
+	}
+	if tx.Type() == RevealTxType {
+		panic("reveal txs cannot be signed and do not have a signing hash")
 	}
 	if tx.Type() != DynamicFeeTxType {
 		return s.eip2930Signer.Hash(tx)
