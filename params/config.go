@@ -373,6 +373,9 @@ type ChainConfig struct {
 
 	// Optimism config, nil if not active
 	Optimism *OptimismConfig `json:"optimism,omitempty"`
+
+	// Shutter config
+	Shutter *ShutterConfig `json:"shutter,omitempty"`
 }
 
 // EthashConfig is the consensus engine configs for proof-of-work based sealing.
@@ -404,6 +407,17 @@ type OptimismConfig struct {
 // String implements the stringer interface, returning the optimism fee config details.
 func (o *OptimismConfig) String() string {
 	return "optimism"
+}
+
+// ShutterConfig is the Shutter config.
+type ShutterConfig struct {
+	KeyperSetManagerAddress     common.Address `json:"keyperSetManagerAddress"`
+	KeyBroadcastContractAddress common.Address `json:"keyBroadcastContractAddress"`
+}
+
+// String implements the stringer interface, returning the shutter config details.
+func (o *ShutterConfig) String() string {
+	return "shutter"
 }
 
 // Description returns a human-readable description of ChainConfig.
@@ -639,6 +653,11 @@ func (c *ChainConfig) IsOptimismCanyon(time uint64) bool {
 // IsOptimismPreBedrock returns true iff this is an optimism node & bedrock is not yet active
 func (c *ChainConfig) IsOptimismPreBedrock(num *big.Int) bool {
 	return c.IsOptimism() && !c.IsBedrock(num)
+}
+
+// IsShutter returns true iff this is a Shutterized Optimism node.
+func (c *ChainConfig) IsShutter() bool {
+	return c.Shutter != nil
 }
 
 // CheckCompatible checks whether scheduled fork transitions have been imported
@@ -960,6 +979,7 @@ type Rules struct {
 	IsVerkle                                                bool
 	IsOptimismBedrock, IsOptimismRegolith                   bool
 	IsOptimismCanyon                                        bool
+	IsShutter                                               bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -989,5 +1009,7 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsOptimismBedrock:  c.IsOptimismBedrock(num),
 		IsOptimismRegolith: c.IsOptimismRegolith(timestamp),
 		IsOptimismCanyon:   c.IsOptimismCanyon(timestamp),
+		// Shutter
+		IsShutter: c.IsShutter(),
 	}
 }
