@@ -100,6 +100,12 @@ func newPreKeyBroadcastTestEnv() *testEnv {
 	return env
 }
 
+func newTestEnv() *testEnv {
+	env := newPreKeyBroadcastTestEnv()
+	env.BroadcastEonKey()
+	return env
+}
+
 func (env *testEnv) GetStateDB() *state.StateDB {
 	statedb, err := state.New(env.Chain.CurrentHeader().Root, state.NewDatabase(env.DB), nil)
 	if err != nil {
@@ -374,4 +380,35 @@ func TestIsShutterEnabled(t *testing.T) {
 	check(false)
 	env.BroadcastEonKey()
 	check(true)
+}
+
+func TestBlocksStartWithRevealTx(t *testing.T) {
+	env := newTestEnv()
+	processor := NewStateProcessor(env.Chain.Config(), env.Chain, env.Chain.Engine())
+	head := env.Chain.GetBlockByHash(env.Chain.CurrentBlock().Hash())
+
+	blocks, _ := GenerateChain(env.Chain.Config(), head, env.Chain.Engine(), env.DB, 1, nil)
+	_, _, _, err := processor.Process(blocks[0], env.GetStateDB(), vm.Config{})
+	if err != ErrNoRevealTx {
+		t.Errorf("expected no reveal tx error, got %v", err)
+	}
+
+	blocks, _ = GenerateChain(env.Chain.Config(), head, env.Chain.Engine(), env.DB, 1, func(n int, g *BlockGen) {
+		revealTx := &types.RevealTx{}
+		g.AddTx(types.NewTx(revealTx))
+		g.AddTx(types.NewTx(revealTx))
+	})
+	_, _, _, err = processor.Process(blocks[0], env.GetStateDB(), vm.Config{})
+	if err != ErrUnexpectedRevealTx {
+		t.Errorf("expected unexpected reveal tx error, got %v", err)
+	}
+
+	blocks, _ = GenerateChain(env.Chain.Config(), head, env.Chain.Engine(), env.DB, 1, func(n int, g *BlockGen) {
+		revealTx := &types.RevealTx{}
+		g.AddTx(types.NewTx(revealTx))
+	})
+	_, _, _, err = processor.Process(blocks[0], env.GetStateDB(), vm.Config{})
+	if err != nil {
+		t.Errorf("processing block failed: %v", err)
+	}
 }
