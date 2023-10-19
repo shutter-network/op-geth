@@ -32,7 +32,7 @@ func AreShutterContractsDeployed(config *params.ChainConfig, evm *vm.EVM) bool {
 // GetCurrentEon returns the eon at the current block number.
 func GetCurrentEon(config *params.ChainConfig, evm *vm.EVM) (uint64, error) {
 	block := evm.Context.BlockNumber.Uint64()
-	data, err := shutter.KeyperSetManagerABI.Pack("getKeyperSetIndexBySlot", block)
+	data, err := shutter.KeyperSetManagerABI.Pack("getKeyperSetIndexByBlock", block)
 	if err != nil {
 		return 0, err
 	}
@@ -53,16 +53,16 @@ func GetCurrentEon(config *params.ChainConfig, evm *vm.EVM) (uint64, error) {
 		return 0, err
 	}
 
-	unpacked, err := shutter.KeyperSetManagerABI.Unpack("getKeyperSetIndexBySlot", ret)
+	unpacked, err := shutter.KeyperSetManagerABI.Unpack("getKeyperSetIndexByBlock", ret)
 	if err != nil {
 		return 0, err
 	}
 	if len(unpacked) != 1 {
-		return 0, fmt.Errorf("getKeyperSetIndexBySlot did not return single value")
+		return 0, fmt.Errorf("getKeyperSetIndexByBlock did not return single value")
 	}
 	eon, ok := unpacked[0].(uint64)
 	if !ok {
-		return 0, fmt.Errorf("getKeyperSetIndexBySlot returned value of unexpected type")
+		return 0, fmt.Errorf("getKeyperSetIndexByBlock returned value of unexpected type")
 	}
 	return eon, nil
 }
