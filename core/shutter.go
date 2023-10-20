@@ -108,6 +108,37 @@ func GetCurrentEonKey(config *params.ChainConfig, evm *vm.EVM) ([]byte, error) {
 	return key, nil
 }
 
+func IsShutterKeyperSetManagerPaused(config *params.ChainConfig, evm *vm.EVM) (bool, error) {
+	data, err := shutter.KeyperSetManagerABI.Pack("paused")
+	if err != nil {
+		return false, err
+	}
+	sender := vm.AccountRef(common.Address{})
+	ret, _, err := evm.Call(
+		sender,
+		config.Shutter.KeyperSetManagerAddress,
+		data,
+		100_000_000,
+		new(big.Int),
+	)
+	if err != nil {
+		return false, err
+	}
+
+	unpacked, err := shutter.KeyperSetManagerABI.Unpack("paused", ret)
+	if err != nil {
+		return false, err
+	}
+	if len(unpacked) != 1 {
+		return false, fmt.Errorf("key broadcast contract returned unexpected number of values")
+	}
+	paused, ok := unpacked[0].(bool)
+	if !ok {
+		return false, fmt.Errorf("key broadcast contract returned unexpected type")
+	}
+	return paused, nil
+}
+
 // IsShutterEnabled checks if Shutter is enabled at the given block number.
 // Shutter is enabled iff
 // - Shutter is enabled in the chain config,

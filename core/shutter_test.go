@@ -281,6 +281,18 @@ func (env *testEnv) BroadcastEonKey() {
 	env.SendTransaction(tx, deployKey)
 }
 
+func (env *testEnv) PauseKeyperSetManager() {
+	data, err := shutter.KeyperSetManagerABI.Pack("pause")
+	if err != nil {
+		panic(err)
+	}
+	tx := &types.DynamicFeeTx{
+		To:   &env.Chain.chainConfig.Shutter.KeyBroadcastContractAddress,
+		Data: data,
+	}
+	env.SendTransaction(tx, deployKey)
+}
+
 func TestAreShutterContractsDeployed(t *testing.T) {
 	env := newPreDeployTestEnv()
 	deployed := AreShutterContractsDeployed(
@@ -354,6 +366,26 @@ func TestGetCurrentEonKey(t *testing.T) {
 	}
 	if !bytes.Equal(key, env.EonKey) {
 		t.Errorf("got unexpected eon key")
+	}
+}
+
+func TestIsKeyperSetManagerPaused(t *testing.T) {
+	env := newTestEnv()
+	paused, err := IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	if err != nil {
+		t.Errorf("failed to check if keyper set manager is paused: %v", err)
+	}
+	if paused {
+		t.Errorf("keyper set manager is initially paused")
+	}
+
+	env.PauseKeyperSetManager()
+	paused, err = IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	if err != nil {
+		t.Errorf("failed to check if keyper set manager is paused: %v", err)
+	}
+	if !paused {
+		t.Errorf("keyper set manager is not paused")
 	}
 }
 
