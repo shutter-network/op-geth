@@ -49,9 +49,11 @@ type testEnv struct {
 	Chain *BlockChain
 
 	EonKey []byte
+
+	t *testing.T
 }
 
-func newPreDeployTestEnv() *testEnv {
+func newPreDeployTestEnv(t *testing.T) *testEnv {
 	db := rawdb.NewMemoryDatabase()
 	engine := ethash.NewFaker()
 	vmConfig := vm.Config{}
@@ -60,7 +62,7 @@ func newPreDeployTestEnv() *testEnv {
 	alloc := make(GenesisAlloc)
 	oneEth, ok := new(big.Int).SetString("1000000000000000000", 10)
 	if !ok {
-		panic("invalid int")
+		t.Fatalf("invalid genesis allocation amount")
 	}
 	alloc[deployAddress] = GenesisAccount{Balance: oneEth}
 	genesis := &Genesis{
@@ -71,12 +73,12 @@ func newPreDeployTestEnv() *testEnv {
 	triedb := trie.NewDatabase(db, trie.HashDefaults)
 	_, err := genesis.Commit(db, triedb)
 	if err != nil {
-		panic(err)
+		t.Fatalf("failed to commit genesis state: %v", err)
 	}
 
 	chain, err := NewBlockChain(db, nil, genesis, nil, engine, vmConfig, nil, nil)
 	if err != nil {
-		panic(err)
+		t.Fatalf("failed to create blockchain: %v", err)
 	}
 
 	return &testEnv{
@@ -84,24 +86,26 @@ func newPreDeployTestEnv() *testEnv {
 		Chain: chain,
 
 		EonKey: []byte("key"),
+
+		t: t,
 	}
 }
 
-func newPreKeyperConfigTestEnv() *testEnv {
-	env := newPreDeployTestEnv()
+func newPreKeyperConfigTestEnv(t *testing.T) *testEnv {
+	env := newPreDeployTestEnv(t)
 	env.DeployContracts()
 	return env
 }
 
-func newPreKeyBroadcastTestEnv() *testEnv {
-	env := newPreKeyperConfigTestEnv()
+func newPreKeyBroadcastTestEnv(t *testing.T) *testEnv {
+	env := newPreKeyperConfigTestEnv(t)
 	env.ScheduleKeyperSet()
 	env.ExtendChain(10, nil)
 	return env
 }
 
-func newTestEnv() *testEnv {
-	env := newPreKeyBroadcastTestEnv()
+func newTestEnv(t *testing.T) *testEnv {
+	env := newPreKeyBroadcastTestEnv(t)
 	env.BroadcastEonKey()
 	return env
 }
@@ -109,7 +113,7 @@ func newTestEnv() *testEnv {
 func (env *testEnv) GetStateDB() *state.StateDB {
 	statedb, err := state.New(env.Chain.CurrentHeader().Root, state.NewDatabase(env.DB), nil)
 	if err != nil {
-		panic(err)
+		env.t.Fatalf("failed to create statedb: %v", err)
 	}
 	return statedb
 }
@@ -134,7 +138,7 @@ func (env *testEnv) ExtendChain(n int, gen func(int, *BlockGen)) ([]*types.Block
 	blocks, receipts := GenerateChain(env.Chain.Config(), head, env.Chain.Engine(), env.DB, n, gen)
 	_, err := env.Chain.InsertChain(blocks)
 	if err != nil {
-		panic(err)
+		env.t.Fatalf("failed to insert blocks into chain: %v", err)
 	}
 	return blocks, receipts
 }
@@ -154,20 +158,20 @@ func (env *testEnv) SendTransaction(unsignedTx *types.DynamicFeeTx, key *ecdsa.P
 
 	tx, err := types.SignTx(types.NewTx(unsignedTx), signer, deployKey)
 	if err != nil {
-		panic(err)
+		env.t.Fatalf("failed to sign tx: %v", err)
 	}
 	_, receipts := env.ExtendChain(1, func(n int, g *BlockGen) {
 		g.AddTx(tx)
 	})
 	if len(receipts) != 1 {
-		panic("expected one set of receipts")
+		env.t.Fatalf("expected one set of receipts, got %d", len(receipts))
 	}
 	if len(receipts[0]) != 1 {
-		panic("expected single receipt")
+		env.t.Fatalf("expected single receipt, got %d", len(receipts[0]))
 	}
 	receipt := receipts[0][0]
 	if receipt.Status == types.ReceiptStatusFailed {
-		panic("transaction")
+		env.t.Fatalf("transaction failed")
 	}
 	return receipt
 }
@@ -187,20 +191,20 @@ func (env *testEnv) DeployContract(data []byte) *types.Receipt {
 	}
 	tx, err := types.SignTx(types.NewTx(unsignedTx), signer, deployKey)
 	if err != nil {
-		panic(err)
+		env.t.Fatalf("failed to sign deploy transaction: %v", err)
 	}
 	_, receipts := env.ExtendChain(1, func(n int, g *BlockGen) {
 		g.AddTx(tx)
 	})
 	if len(receipts) != 1 {
-		panic("expected one set of receipts")
+		env.t.Fatalf("expected one set of receipts, got %d", len(receipts))
 	}
 	if len(receipts[0]) != 1 {
-		panic("expected single receipt")
+		env.t.Fatalf("expected single receipt, got %d", len(receipts[0]))
 	}
 	receipt := receipts[0][0]
 	if receipt.Status == types.ReceiptStatusFailed {
-		panic("deployment failed")
+		env.t.Fatalf("deployment transaction failed")
 	}
 	return receipt
 }
@@ -219,10 +223,10 @@ func (env *testEnv) DeployContracts() {
 	keyBroadcastContractReceipt := env.SendTransaction(deployKeyBroadcastContractTx, deployKey)
 
 	if keyperSetManagerReceipt.ContractAddress != env.Chain.Config().Shutter.KeyperSetManagerAddress {
-		panic("keyper set manager deployed at unexpected address")
+		env.t.Fatalf("keyper set manager deployed at unexpected address")
 	}
 	if keyBroadcastContractReceipt.ContractAddress != env.Chain.Config().Shutter.KeyBroadcastContractAddress {
-		panic("key broadcast contract deployed at unexpected address")
+		env.t.Fatalf("key broadcast contract deployed at unexpected address")
 	}
 }
 
@@ -235,7 +239,7 @@ func (env *testEnv) ScheduleKeyperSet() {
 
 	setBroadcasterData, err := shutter.KeyperSetABI.Pack("setKeyBroadcaster", deployAddress)
 	if err != nil {
-		panic(err)
+		env.t.Fatalf("failed to encode setKeyBroadcaster data: %v", err)
 	}
 	setBroadcasterTx := &types.DynamicFeeTx{
 		To:   &keyperSetReceipt.ContractAddress,
@@ -245,7 +249,7 @@ func (env *testEnv) ScheduleKeyperSet() {
 
 	finalizeData, err := shutter.KeyperSetABI.Pack("setFinalized")
 	if err != nil {
-		panic(err)
+		env.t.Fatalf("failed to encode setFinalized data: %v", err)
 	}
 	finalizeTx := &types.DynamicFeeTx{
 		To:   &keyperSetReceipt.ContractAddress,
@@ -260,7 +264,7 @@ func (env *testEnv) ScheduleKeyperSet() {
 		keyperSetReceipt.ContractAddress,
 	)
 	if err != nil {
-		panic(err)
+		env.t.Fatalf("failed to encode addKeyperSet data: %v", err)
 	}
 	addKeyperSetTx := &types.DynamicFeeTx{
 		To:   &env.Chain.Config().Shutter.KeyperSetManagerAddress,
@@ -272,7 +276,7 @@ func (env *testEnv) ScheduleKeyperSet() {
 func (env *testEnv) BroadcastEonKey() {
 	data, err := shutter.KeyBroadcastContractABI.Pack("broadcastEonKey", uint64(0), env.EonKey)
 	if err != nil {
-		panic(err)
+		env.t.Fatalf("failed to encode broadcastEonKey data: %v", err)
 	}
 	tx := &types.DynamicFeeTx{
 		To:   &env.Chain.chainConfig.Shutter.KeyBroadcastContractAddress,
@@ -284,7 +288,7 @@ func (env *testEnv) BroadcastEonKey() {
 func (env *testEnv) PauseKeyperSetManager() {
 	data, err := shutter.KeyperSetManagerABI.Pack("pause")
 	if err != nil {
-		panic(err)
+		env.t.Fatalf("failed to encode pause data: %v", err)
 	}
 	tx := &types.DynamicFeeTx{
 		To:   &env.Chain.chainConfig.Shutter.KeyBroadcastContractAddress,
@@ -294,7 +298,7 @@ func (env *testEnv) PauseKeyperSetManager() {
 }
 
 func TestAreShutterContractsDeployed(t *testing.T) {
-	env := newPreDeployTestEnv()
+	env := newPreDeployTestEnv(t)
 	deployed := AreShutterContractsDeployed(
 		env.Chain.Config(),
 		env.GetEVM(vm.TxContext{}, vm.Config{}),
@@ -314,7 +318,7 @@ func TestAreShutterContractsDeployed(t *testing.T) {
 }
 
 func TestGetCurrentEon(t *testing.T) {
-	env := newPreKeyperConfigTestEnv()
+	env := newPreKeyperConfigTestEnv(t)
 	_, err := GetCurrentEon(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
 	if err == nil {
 		t.Errorf("no error before keyper config")
@@ -350,7 +354,7 @@ func TestGetCurrentEon(t *testing.T) {
 }
 
 func TestGetCurrentEonKey(t *testing.T) {
-	env := newPreKeyBroadcastTestEnv()
+	env := newPreKeyBroadcastTestEnv(t)
 	key, err := GetCurrentEonKey(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
 	if err != nil {
 		t.Errorf("failed to get eon key")
@@ -370,7 +374,7 @@ func TestGetCurrentEonKey(t *testing.T) {
 }
 
 func TestIsKeyperSetManagerPaused(t *testing.T) {
-	env := newTestEnv()
+	env := newTestEnv(t)
 	paused, err := IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
 	if err != nil {
 		t.Errorf("failed to check if keyper set manager is paused: %v", err)
@@ -390,7 +394,7 @@ func TestIsKeyperSetManagerPaused(t *testing.T) {
 }
 
 func TestIsShutterEnabled(t *testing.T) {
-	env := newPreDeployTestEnv()
+	env := newPreDeployTestEnv(t)
 	check := func(shouldBeEnabled bool) {
 		enabled, err := IsShutterEnabled(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
 		if err != nil {
@@ -415,7 +419,7 @@ func TestIsShutterEnabled(t *testing.T) {
 }
 
 func TestBlocksStartWithRevealTx(t *testing.T) {
-	env := newTestEnv()
+	env := newTestEnv(t)
 	processor := NewStateProcessor(env.Chain.Config(), env.Chain, env.Chain.Engine())
 	head := env.Chain.GetBlockByHash(env.Chain.CurrentBlock().Hash())
 
