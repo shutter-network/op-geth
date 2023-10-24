@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -145,7 +146,7 @@ func (env *testEnv) ExtendChain(n int, gen func(int, *BlockGen)) ([]*types.Block
 
 // SendTransaction signs and sends the given transaction. All fields but data and to are
 // automatically populated with reasonable values.
-func (env *testEnv) SendTransaction(unsignedTx *types.DynamicFeeTx, key *ecdsa.PrivateKey) *types.Receipt {
+func (env *testEnv) SendTransaction(unsignedTx *types.DynamicFeeTx, key *ecdsa.PrivateKey, shutterEnabled bool) *types.Receipt {
 	signer := env.GetSigner()
 	statedb := env.GetStateDB()
 
@@ -161,15 +162,23 @@ func (env *testEnv) SendTransaction(unsignedTx *types.DynamicFeeTx, key *ecdsa.P
 		env.t.Fatalf("failed to sign tx: %v", err)
 	}
 	_, receipts := env.ExtendChain(1, func(n int, g *BlockGen) {
+		if shutterEnabled {
+			g.AddTx(types.NewTx(&types.RevealTx{}))
+		}
 		g.AddTx(tx)
 	})
 	if len(receipts) != 1 {
 		env.t.Fatalf("expected one set of receipts, got %d", len(receipts))
 	}
-	if len(receipts[0]) != 1 {
-		env.t.Fatalf("expected single receipt, got %d", len(receipts[0]))
+	numExpectedReceipts := 1
+	if shutterEnabled {
+		numExpectedReceipts += 1
 	}
-	receipt := receipts[0][0]
+	if len(receipts[0]) != numExpectedReceipts {
+		env.t.Fatalf("expected %d receipts, got %d", numExpectedReceipts, len(receipts[0]))
+	}
+
+	receipt := receipts[0][numExpectedReceipts-1]
 	if receipt.Status == types.ReceiptStatusFailed {
 		env.t.Fatalf("transaction failed")
 	}
@@ -214,13 +223,13 @@ func (env *testEnv) DeployContracts() {
 		To:   nil,
 		Data: shutter.GetKeyperSetManagerDeployData(),
 	}
-	keyperSetManagerReceipt := env.SendTransaction(deployKeyperSetManagerTx, deployKey)
+	keyperSetManagerReceipt := env.SendTransaction(deployKeyperSetManagerTx, deployKey, false)
 
 	deployKeyBroadcastContractTx := &types.DynamicFeeTx{
 		To:   nil,
 		Data: shutter.GetKeyBroadcastContractDeployData(&keyperSetManagerReceipt.ContractAddress),
 	}
-	keyBroadcastContractReceipt := env.SendTransaction(deployKeyBroadcastContractTx, deployKey)
+	keyBroadcastContractReceipt := env.SendTransaction(deployKeyBroadcastContractTx, deployKey, false)
 
 	if keyperSetManagerReceipt.ContractAddress != env.Chain.Config().Shutter.KeyperSetManagerAddress {
 		env.t.Fatalf("keyper set manager deployed at unexpected address")
@@ -228,6 +237,20 @@ func (env *testEnv) DeployContracts() {
 	if keyBroadcastContractReceipt.ContractAddress != env.Chain.Config().Shutter.KeyBroadcastContractAddress {
 		env.t.Fatalf("key broadcast contract deployed at unexpected address")
 	}
+
+	pauserRole, err := getPauserRole(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	if err != nil {
+		env.t.Fatalf("failed to read PAUSER_ROLE: %v", err)
+	}
+	grantPauserRoleData, err := shutter.KeyperSetManagerABI.Pack("grantRole", pauserRole, deployAddress)
+	if err != nil {
+		env.t.Fatalf("failed to encode grantRole data: %v", err)
+	}
+	grantPauserRoleTx := &types.DynamicFeeTx{
+		To:   &env.Chain.Config().Shutter.KeyperSetManagerAddress,
+		Data: grantPauserRoleData,
+	}
+	env.SendTransaction(grantPauserRoleTx, deployKey, false)
 }
 
 func (env *testEnv) ScheduleKeyperSet() {
@@ -235,7 +258,7 @@ func (env *testEnv) ScheduleKeyperSet() {
 		To:   nil,
 		Data: shutter.GetKeyperSetDeployData(),
 	}
-	keyperSetReceipt := env.SendTransaction(deployTx, deployKey)
+	keyperSetReceipt := env.SendTransaction(deployTx, deployKey, false)
 
 	setBroadcasterData, err := shutter.KeyperSetABI.Pack("setKeyBroadcaster", deployAddress)
 	if err != nil {
@@ -245,7 +268,7 @@ func (env *testEnv) ScheduleKeyperSet() {
 		To:   &keyperSetReceipt.ContractAddress,
 		Data: setBroadcasterData,
 	}
-	env.SendTransaction(setBroadcasterTx, deployKey)
+	env.SendTransaction(setBroadcasterTx, deployKey, false)
 
 	finalizeData, err := shutter.KeyperSetABI.Pack("setFinalized")
 	if err != nil {
@@ -255,7 +278,7 @@ func (env *testEnv) ScheduleKeyperSet() {
 		To:   &keyperSetReceipt.ContractAddress,
 		Data: finalizeData,
 	}
-	env.SendTransaction(finalizeTx, deployKey)
+	env.SendTransaction(finalizeTx, deployKey, false)
 
 	activationBlockNumber := env.Chain.CurrentBlock().Number.Uint64() + 10
 	addKeyperSetData, err := shutter.KeyperSetManagerABI.Pack(
@@ -270,7 +293,7 @@ func (env *testEnv) ScheduleKeyperSet() {
 		To:   &env.Chain.Config().Shutter.KeyperSetManagerAddress,
 		Data: addKeyperSetData,
 	}
-	env.SendTransaction(addKeyperSetTx, deployKey)
+	env.SendTransaction(addKeyperSetTx, deployKey, false)
 }
 
 func (env *testEnv) BroadcastEonKey() {
@@ -282,7 +305,7 @@ func (env *testEnv) BroadcastEonKey() {
 		To:   &env.Chain.chainConfig.Shutter.KeyBroadcastContractAddress,
 		Data: data,
 	}
-	env.SendTransaction(tx, deployKey)
+	env.SendTransaction(tx, deployKey, false)
 }
 
 func (env *testEnv) PauseKeyperSetManager() {
@@ -291,10 +314,41 @@ func (env *testEnv) PauseKeyperSetManager() {
 		env.t.Fatalf("failed to encode pause data: %v", err)
 	}
 	tx := &types.DynamicFeeTx{
-		To:   &env.Chain.chainConfig.Shutter.KeyBroadcastContractAddress,
+		To:   &env.Chain.chainConfig.Shutter.KeyperSetManagerAddress,
 		Data: data,
 	}
-	env.SendTransaction(tx, deployKey)
+	env.SendTransaction(tx, deployKey, true)
+}
+
+func getPauserRole(config *params.ChainConfig, evm *vm.EVM) (common.Hash, error) {
+	data, err := shutter.KeyperSetManagerABI.Pack("PAUSER_ROLE")
+	if err != nil {
+		return common.Hash{}, err
+	}
+	sender := vm.AccountRef(common.Address{})
+	ret, _, err := evm.Call(
+		sender,
+		config.Shutter.KeyperSetManagerAddress,
+		data,
+		100_000_000,
+		new(big.Int),
+	)
+	if err != nil {
+		return common.Hash{}, err
+	}
+
+	unpacked, err := shutter.KeyperSetManagerABI.Unpack("PAUSER_ROLE", ret)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if len(unpacked) != 1 {
+		return common.Hash{}, fmt.Errorf("keyper set manager returned unexpected number of values")
+	}
+	pauserRole, ok := unpacked[0].([32]byte)
+	if !ok {
+		return common.Hash{}, fmt.Errorf("keyper set manager returned unexpected type")
+	}
+	return common.BytesToHash(pauserRole[:]), nil
 }
 
 func TestAreShutterContractsDeployed(t *testing.T) {
