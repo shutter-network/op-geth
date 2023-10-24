@@ -119,10 +119,10 @@ func (env *testEnv) GetStateDB() *state.StateDB {
 	return statedb
 }
 
-func (env *testEnv) GetEVM(txCtx vm.TxContext, vmConfig vm.Config) *vm.EVM {
+func (env *testEnv) GetEVM() *vm.EVM {
 	author := &common.Address{}
 	blockCtx := NewEVMBlockContext(env.Chain.CurrentHeader(), env.Chain, author, env.Chain.chainConfig, env.GetStateDB())
-	vmenv := vm.NewEVM(blockCtx, txCtx, env.GetStateDB(), env.Chain.Config(), vmConfig)
+	vmenv := vm.NewEVM(blockCtx, vm.TxContext{}, env.GetStateDB(), env.Chain.Config(), vm.Config{})
 	return vmenv
 }
 
@@ -238,7 +238,7 @@ func (env *testEnv) DeployContracts() {
 		env.t.Fatalf("key broadcast contract deployed at unexpected address")
 	}
 
-	pauserRole, err := getPauserRole(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	pauserRole, err := getPauserRole(env.Chain.Config(), env.GetEVM())
 	if err != nil {
 		env.t.Fatalf("failed to read PAUSER_ROLE: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestAreShutterContractsDeployed(t *testing.T) {
 	env := newPreDeployTestEnv(t)
 	deployed := AreShutterContractsDeployed(
 		env.Chain.Config(),
-		env.GetEVM(vm.TxContext{}, vm.Config{}),
+		env.GetEVM(),
 	)
 	if deployed {
 		t.Fail()
@@ -364,7 +364,7 @@ func TestAreShutterContractsDeployed(t *testing.T) {
 	env.DeployContracts()
 	deployed = AreShutterContractsDeployed(
 		env.Chain.Config(),
-		env.GetEVM(vm.TxContext{}, vm.Config{}),
+		env.GetEVM(),
 	)
 	if !deployed {
 		t.Fail()
@@ -373,19 +373,19 @@ func TestAreShutterContractsDeployed(t *testing.T) {
 
 func TestGetCurrentEon(t *testing.T) {
 	env := newPreKeyperConfigTestEnv(t)
-	_, err := GetCurrentEon(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	_, err := GetCurrentEon(env.Chain.Config(), env.GetEVM())
 	if err == nil {
 		t.Errorf("no error before keyper config")
 	}
 
 	env.ScheduleKeyperSet()
-	_, err = GetCurrentEon(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	_, err = GetCurrentEon(env.Chain.Config(), env.GetEVM())
 	if err == nil {
 		t.Errorf("no error before keyper set is activated")
 	}
 
 	env.ExtendChain(10, nil)
-	eon, err := GetCurrentEon(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	eon, err := GetCurrentEon(env.Chain.Config(), env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to get eon")
 	}
@@ -398,7 +398,7 @@ func TestGetCurrentEon(t *testing.T) {
 	env.ScheduleKeyperSet()
 	env.ExtendChain(5, nil)
 
-	eon, err = GetCurrentEon(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	eon, err = GetCurrentEon(env.Chain.Config(), env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to get eon")
 	}
@@ -409,7 +409,7 @@ func TestGetCurrentEon(t *testing.T) {
 
 func TestGetCurrentEonKey(t *testing.T) {
 	env := newPreKeyBroadcastTestEnv(t)
-	key, err := GetCurrentEonKey(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	key, err := GetCurrentEonKey(env.Chain.Config(), env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to get eon key")
 	}
@@ -418,7 +418,7 @@ func TestGetCurrentEonKey(t *testing.T) {
 	}
 
 	env.BroadcastEonKey()
-	key, err = GetCurrentEonKey(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	key, err = GetCurrentEonKey(env.Chain.Config(), env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to get eon key")
 	}
@@ -429,7 +429,7 @@ func TestGetCurrentEonKey(t *testing.T) {
 
 func TestIsKeyperSetManagerPaused(t *testing.T) {
 	env := newTestEnv(t)
-	paused, err := IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	paused, err := IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to check if keyper set manager is paused: %v", err)
 	}
@@ -438,7 +438,7 @@ func TestIsKeyperSetManagerPaused(t *testing.T) {
 	}
 
 	env.PauseKeyperSetManager()
-	paused, err = IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+	paused, err = IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to check if keyper set manager is paused: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestIsKeyperSetManagerPaused(t *testing.T) {
 func TestIsShutterEnabled(t *testing.T) {
 	env := newPreDeployTestEnv(t)
 	check := func(shouldBeEnabled bool) {
-		enabled, err := IsShutterEnabled(env.Chain.Config(), env.GetEVM(vm.TxContext{}, vm.Config{}))
+		enabled, err := IsShutterEnabled(env.Chain.Config(), env.GetEVM())
 		if err != nil {
 			t.Errorf("failed to check if shutter is enabled: %v", err)
 		}
