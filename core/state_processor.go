@@ -111,6 +111,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	for i, tx := range block.Transactions() {
 		// TODO: execute reveal txs properly
 		if tx.Type() == types.RevealTxType {
+			receipts = append(receipts, &types.Receipt{})
 			continue
 		}
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
