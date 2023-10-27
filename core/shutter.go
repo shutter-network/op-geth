@@ -146,6 +146,7 @@ func IsShutterKeyperSetManagerPaused(evm *vm.EVM) (bool, error) {
 // - the required contracts have been deployed,
 // - a keyper set has been configured and is active, and
 // - an eon key has been broadcast for the current eon.
+// - the keyper set manager is not paused
 // We don't check if the key is valid because this is in general not possible (an invalid key is
 // functionally equivalent to a valid one without a corresponding private key).
 func IsShutterEnabled(evm *vm.EVM) (bool, error) {
@@ -167,6 +168,14 @@ func IsShutterEnabled(evm *vm.EVM) (bool, error) {
 		return false, err
 	}
 	if len(eonKey) == 0 {
+		return false, nil
+	}
+
+	paused, err := IsShutterKeyperSetManagerPaused(evm)
+	if err != nil {
+		return false, err
+	}
+	if paused {
 		return false, nil
 	}
 

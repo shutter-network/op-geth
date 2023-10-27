@@ -456,6 +456,10 @@ func TestIsShutterEnabled(t *testing.T) {
 	check(false)
 	env.BroadcastEonKey()
 	check(true)
+	env.ExtendChain(1, func(n int, g *BlockGen) {
+		g.AddTx(types.NewTx(&types.RevealTx{}))
+	})
+	check(false)
 }
 
 func TestBlocksStartWithRevealTx(t *testing.T) {
