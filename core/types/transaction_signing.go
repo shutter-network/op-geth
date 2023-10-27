@@ -265,7 +265,7 @@ func (s londonSigner) Sender(tx *Transaction) (common.Address, error) {
 		}
 	}
 	if tx.Type() == RevealTxType {
-		return common.Address{}, fmt.Errorf("reveal txs do not have a sender")
+		return common.Address{}, nil
 	}
 	if tx.Type() != DynamicFeeTxType {
 		return s.eip2930Signer.Sender(tx)
