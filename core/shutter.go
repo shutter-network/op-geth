@@ -132,11 +132,11 @@ func IsShutterKeyperSetManagerPaused(config *params.ChainConfig, evm *vm.EVM) (b
 		return false, err
 	}
 	if len(unpacked) != 1 {
-		return false, fmt.Errorf("key broadcast contract returned unexpected number of values")
+		return false, fmt.Errorf("keyper set manager returned unexpected number of values")
 	}
 	paused, ok := unpacked[0].(bool)
 	if !ok {
-		return false, fmt.Errorf("key broadcast contract returned unexpected type")
+		return false, fmt.Errorf("keyper set manager returned unexpected type")
 	}
 	return paused, nil
 }

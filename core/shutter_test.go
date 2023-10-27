@@ -308,18 +308,6 @@ func (env *testEnv) BroadcastEonKey() {
 	env.SendTransaction(tx, deployKey, false)
 }
 
-func (env *testEnv) PauseKeyperSetManager() {
-	data, err := shutter.KeyperSetManagerABI.Pack("pause")
-	if err != nil {
-		env.t.Fatalf("failed to encode pause data: %v", err)
-	}
-	tx := &types.DynamicFeeTx{
-		To:   &env.Chain.chainConfig.Shutter.KeyperSetManagerAddress,
-		Data: data,
-	}
-	env.SendTransaction(tx, deployKey, true)
-}
-
 func getPauserRole(config *params.ChainConfig, evm *vm.EVM) (common.Hash, error) {
 	data, err := shutter.KeyperSetManagerABI.Pack("PAUSER_ROLE")
 	if err != nil {
@@ -437,7 +425,11 @@ func TestIsKeyperSetManagerPaused(t *testing.T) {
 		t.Errorf("keyper set manager is initially paused")
 	}
 
-	env.PauseKeyperSetManager()
+	// pause by sending empty reveal tx
+	env.ExtendChain(1, func(n int, g *BlockGen) {
+		g.AddTx(types.NewTx(&types.RevealTx{}))
+	})
+
 	paused, err = IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to check if keyper set manager is paused: %v", err)
