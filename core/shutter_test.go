@@ -341,19 +341,13 @@ func getPauserRole(config *params.ChainConfig, evm *vm.EVM) (common.Hash, error)
 
 func TestAreShutterContractsDeployed(t *testing.T) {
 	env := newPreDeployTestEnv(t)
-	deployed := AreShutterContractsDeployed(
-		env.Chain.Config(),
-		env.GetEVM(),
-	)
+	deployed := AreShutterContractsDeployed(env.GetEVM())
 	if deployed {
 		t.Fail()
 	}
 
 	env.DeployContracts()
-	deployed = AreShutterContractsDeployed(
-		env.Chain.Config(),
-		env.GetEVM(),
-	)
+	deployed = AreShutterContractsDeployed(env.GetEVM())
 	if !deployed {
 		t.Fail()
 	}
@@ -361,19 +355,19 @@ func TestAreShutterContractsDeployed(t *testing.T) {
 
 func TestGetCurrentEon(t *testing.T) {
 	env := newPreKeyperConfigTestEnv(t)
-	_, err := GetCurrentEon(env.Chain.Config(), env.GetEVM())
+	_, err := GetCurrentEon(env.GetEVM())
 	if err == nil {
 		t.Errorf("no error before keyper config")
 	}
 
 	env.ScheduleKeyperSet()
-	_, err = GetCurrentEon(env.Chain.Config(), env.GetEVM())
+	_, err = GetCurrentEon(env.GetEVM())
 	if err == nil {
 		t.Errorf("no error before keyper set is activated")
 	}
 
 	env.ExtendChain(10, nil)
-	eon, err := GetCurrentEon(env.Chain.Config(), env.GetEVM())
+	eon, err := GetCurrentEon(env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to get eon")
 	}
@@ -386,7 +380,7 @@ func TestGetCurrentEon(t *testing.T) {
 	env.ScheduleKeyperSet()
 	env.ExtendChain(5, nil)
 
-	eon, err = GetCurrentEon(env.Chain.Config(), env.GetEVM())
+	eon, err = GetCurrentEon(env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to get eon")
 	}
@@ -397,7 +391,7 @@ func TestGetCurrentEon(t *testing.T) {
 
 func TestGetCurrentEonKey(t *testing.T) {
 	env := newPreKeyBroadcastTestEnv(t)
-	key, err := GetCurrentEonKey(env.Chain.Config(), env.GetEVM())
+	key, err := GetCurrentEonKey(env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to get eon key")
 	}
@@ -406,7 +400,7 @@ func TestGetCurrentEonKey(t *testing.T) {
 	}
 
 	env.BroadcastEonKey()
-	key, err = GetCurrentEonKey(env.Chain.Config(), env.GetEVM())
+	key, err = GetCurrentEonKey(env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to get eon key")
 	}
@@ -417,7 +411,7 @@ func TestGetCurrentEonKey(t *testing.T) {
 
 func TestIsKeyperSetManagerPaused(t *testing.T) {
 	env := newTestEnv(t)
-	paused, err := IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM())
+	paused, err := IsShutterKeyperSetManagerPaused(env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to check if keyper set manager is paused: %v", err)
 	}
@@ -430,7 +424,7 @@ func TestIsKeyperSetManagerPaused(t *testing.T) {
 		g.AddTx(types.NewTx(&types.RevealTx{}))
 	})
 
-	paused, err = IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM())
+	paused, err = IsShutterKeyperSetManagerPaused(env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to check if keyper set manager is paused: %v", err)
 	}
@@ -442,7 +436,7 @@ func TestIsKeyperSetManagerPaused(t *testing.T) {
 func TestIsShutterEnabled(t *testing.T) {
 	env := newPreDeployTestEnv(t)
 	check := func(shouldBeEnabled bool) {
-		enabled, err := IsShutterEnabled(env.Chain.Config(), env.GetEVM())
+		enabled, err := IsShutterEnabled(env.GetEVM())
 		if err != nil {
 			t.Errorf("failed to check if shutter is enabled: %v", err)
 		}
@@ -498,7 +492,7 @@ func TestBlocksStartWithRevealTx(t *testing.T) {
 func TestEmptyRevealPausesShutter(t *testing.T) {
 	env := newTestEnv(t)
 
-	pausedBefore, err := IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM())
+	pausedBefore, err := IsShutterKeyperSetManagerPaused(env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to check if shutter is paused: %v", err)
 	}
@@ -510,7 +504,7 @@ func TestEmptyRevealPausesShutter(t *testing.T) {
 		g.AddTx(types.NewTx(&types.RevealTx{}))
 	})
 
-	pausedAfter, err := IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM())
+	pausedAfter, err := IsShutterKeyperSetManagerPaused(env.GetEVM())
 	if err != nil {
 		t.Errorf("failed to check if shutter is paused: %v", err)
 	}
