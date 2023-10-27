@@ -8,7 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/shutter"
 	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/ethereum/go-ethereum/params"
 )
 
 var ShutterSystemAddress = common.HexToAddress("0x8000000000000000000000000000000000000001")
@@ -17,10 +16,10 @@ var ErrNoActiveKeyperSet = errors.New("no active keyper set at current block num
 
 // AreShutterContractsDeployed checks if the system contracts required for
 // Shutter to operate are deployed.
-func AreShutterContractsDeployed(config *params.ChainConfig, evm *vm.EVM) bool {
+func AreShutterContractsDeployed(evm *vm.EVM) bool {
 	addresses := []common.Address{
-		config.Shutter.KeyperSetManagerAddress,
-		config.Shutter.KeyBroadcastContractAddress,
+		evm.ChainConfig().Shutter.KeyperSetManagerAddress,
+		evm.ChainConfig().Shutter.KeyBroadcastContractAddress,
 	}
 	for _, address := range addresses {
 		code := evm.StateDB.GetCode(address)
@@ -32,7 +31,7 @@ func AreShutterContractsDeployed(config *params.ChainConfig, evm *vm.EVM) bool {
 }
 
 // GetCurrentEon returns the eon at the current block number.
-func GetCurrentEon(config *params.ChainConfig, evm *vm.EVM) (uint64, error) {
+func GetCurrentEon(evm *vm.EVM) (uint64, error) {
 	block := evm.Context.BlockNumber.Uint64()
 	data, err := shutter.KeyperSetManagerABI.Pack("getKeyperSetIndexByBlock", block)
 	if err != nil {
@@ -41,7 +40,7 @@ func GetCurrentEon(config *params.ChainConfig, evm *vm.EVM) (uint64, error) {
 	sender := vm.AccountRef(common.Address{})
 	ret, _, err := evm.Call(
 		sender,
-		config.Shutter.KeyperSetManagerAddress,
+		evm.ChainConfig().Shutter.KeyperSetManagerAddress,
 		data,
 		100_000_000,
 		new(big.Int),
@@ -71,8 +70,8 @@ func GetCurrentEon(config *params.ChainConfig, evm *vm.EVM) (uint64, error) {
 
 // GetCurrentEonKey returns the current eon key or an empty byte slice if it has not been
 // broadcasted yet.
-func GetCurrentEonKey(config *params.ChainConfig, evm *vm.EVM) ([]byte, error) {
-	eon, err := GetCurrentEon(config, evm)
+func GetCurrentEonKey(evm *vm.EVM) ([]byte, error) {
+	eon, err := GetCurrentEon(evm)
 	if err != nil {
 		return []byte{}, err
 	}
@@ -84,7 +83,7 @@ func GetCurrentEonKey(config *params.ChainConfig, evm *vm.EVM) ([]byte, error) {
 	sender := vm.AccountRef(common.Address{})
 	ret, _, err := evm.Call(
 		sender,
-		config.Shutter.KeyBroadcastContractAddress,
+		evm.ChainConfig().Shutter.KeyBroadcastContractAddress,
 		data,
 		100_000_000,
 		new(big.Int),
@@ -110,7 +109,7 @@ func GetCurrentEonKey(config *params.ChainConfig, evm *vm.EVM) ([]byte, error) {
 	return key, nil
 }
 
-func IsShutterKeyperSetManagerPaused(config *params.ChainConfig, evm *vm.EVM) (bool, error) {
+func IsShutterKeyperSetManagerPaused(evm *vm.EVM) (bool, error) {
 	data, err := shutter.KeyperSetManagerABI.Pack("paused")
 	if err != nil {
 		return false, err
@@ -118,7 +117,7 @@ func IsShutterKeyperSetManagerPaused(config *params.ChainConfig, evm *vm.EVM) (b
 	sender := vm.AccountRef(common.Address{})
 	ret, _, err := evm.Call(
 		sender,
-		config.Shutter.KeyperSetManagerAddress,
+		evm.ChainConfig().Shutter.KeyperSetManagerAddress,
 		data,
 		100_000_000,
 		new(big.Int),
@@ -149,18 +148,18 @@ func IsShutterKeyperSetManagerPaused(config *params.ChainConfig, evm *vm.EVM) (b
 // - an eon key has been broadcast for the current eon.
 // We don't check if the key is valid because this is in general not possible (an invalid key is
 // functionally equivalent to a valid one without a corresponding private key).
-func IsShutterEnabled(config *params.ChainConfig, evm *vm.EVM) (bool, error) {
-	rules := config.Rules(evm.Context.BlockNumber, true, evm.Context.Time)
+func IsShutterEnabled(evm *vm.EVM) (bool, error) {
+	rules := evm.ChainConfig().Rules(evm.Context.BlockNumber, true, evm.Context.Time)
 	if !rules.IsShutter {
 		return false, nil
 	}
 
-	deployed := AreShutterContractsDeployed(config, evm)
+	deployed := AreShutterContractsDeployed(evm)
 	if !deployed {
 		return false, nil
 	}
 
-	eonKey, err := GetCurrentEonKey(config, evm)
+	eonKey, err := GetCurrentEonKey(evm)
 	if err == ErrNoActiveKeyperSet {
 		return false, nil
 	}

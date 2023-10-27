@@ -86,7 +86,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		ProcessBeaconBlockRoot(*beaconRoot, vmenv, statedb)
 	}
 
-	isShutterEnabled, err := IsShutterEnabled(p.config, vmenv)
+	isShutterEnabled, err := IsShutterEnabled(vmenv)
 	if err != nil {
 		return nil, nil, 0, err
 	}
