@@ -105,15 +105,16 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 				}
 			}
 		}
+	} else {
+		for _, tx := range block.Transactions() {
+			if tx.Type() == types.RevealTxType {
+				return nil, nil, 0, ErrUnexpectedRevealTx
+			}
+		}
 	}
 
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
-		// TODO: execute reveal txs properly
-		if tx.Type() == types.RevealTxType {
-			receipts = append(receipts, &types.Receipt{})
-			continue
-		}
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
@@ -138,11 +139,6 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 }
 
 func applyTransaction(msg *Message, config *params.ChainConfig, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (*types.Receipt, error) {
-	// TODO: execute reveal txs properly
-	if tx.Type() == types.RevealTxType {
-		return &types.Receipt{}, nil
-	}
-
 	// Create a new context to be used in the EVM environment.
 	txContext := NewEVMTxContext(msg)
 	evm.Reset(txContext, statedb)
@@ -153,7 +149,15 @@ func applyTransaction(msg *Message, config *params.ChainConfig, gp *GasPool, sta
 	}
 
 	// Apply the transaction to the current state (included in the env).
-	result, err := ApplyMessage(evm, msg, gp)
+	var (
+		result *ExecutionResult
+		err    error
+	)
+	if tx.Type() == types.RevealTxType {
+		result, err = ApplyRevealMessage(evm, msg, gp)
+	} else {
+		result, err = ApplyMessage(evm, msg, gp)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -213,11 +217,6 @@ func applyTransaction(msg *Message, config *params.ChainConfig, gp *GasPool, sta
 // for the transaction, gas used and an error if the transaction failed,
 // indicating the block was invalid.
 func ApplyTransaction(config *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *uint64, cfg vm.Config) (*types.Receipt, error) {
-	// TODO: execute reveal txs properly
-	if tx.Type() == types.RevealTxType {
-		return &types.Receipt{}, nil
-	}
-
 	msg, err := TransactionToMessage(tx, types.MakeSigner(config, header.Number, header.Time), header.BaseFee)
 	if err != nil {
 		return nil, err

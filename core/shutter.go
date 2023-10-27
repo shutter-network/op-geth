@@ -11,6 +11,8 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
+var ShutterSystemAddress = common.HexToAddress("0x8000000000000000000000000000000000000001")
+
 var ErrNoActiveKeyperSet = errors.New("no active keyper set at current block number")
 
 // AreShutterContractsDeployed checks if the system contracts required for
@@ -170,4 +172,38 @@ func IsShutterEnabled(config *params.ChainConfig, evm *vm.EVM) (bool, error) {
 	}
 
 	return true, nil
+}
+
+func ApplyRevealMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, error) {
+	key := msg.Data
+	if len(key) == 0 {
+		return ApplyPauseMessage(evm, gp)
+	}
+
+	return &ExecutionResult{}, nil
+}
+
+func ApplyPauseMessage(evm *vm.EVM, gp *GasPool) (*ExecutionResult, error) {
+	data, err := shutter.KeyperSetManagerABI.Pack("pause")
+	if err != nil {
+		return nil, err
+	}
+	sender := vm.AccountRef(ShutterSystemAddress)
+	gasLimit := uint64(100_000_000)
+	ret, leftOverGas, err := evm.Call(
+		sender,
+		evm.ChainConfig().Shutter.KeyperSetManagerAddress,
+		data,
+		gasLimit,
+		new(big.Int),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ExecutionResult{
+		UsedGas:    gasLimit - leftOverGas,
+		Err:        nil,
+		ReturnData: ret,
+	}, nil
 }

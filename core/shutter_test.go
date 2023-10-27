@@ -163,7 +163,7 @@ func (env *testEnv) SendTransaction(unsignedTx *types.DynamicFeeTx, key *ecdsa.P
 	}
 	_, receipts := env.ExtendChain(1, func(n int, g *BlockGen) {
 		if shutterEnabled {
-			g.AddTx(types.NewTx(&types.RevealTx{}))
+			g.AddTx(types.NewTx(&types.RevealTx{Key: []byte("key")}))
 		}
 		g.AddTx(tx)
 	})
@@ -242,7 +242,7 @@ func (env *testEnv) DeployContracts() {
 	if err != nil {
 		env.t.Fatalf("failed to read PAUSER_ROLE: %v", err)
 	}
-	grantPauserRoleData, err := shutter.KeyperSetManagerABI.Pack("grantRole", pauserRole, deployAddress)
+	grantPauserRoleData, err := shutter.KeyperSetManagerABI.Pack("grantRole", pauserRole, ShutterSystemAddress)
 	if err != nil {
 		env.t.Fatalf("failed to encode grantRole data: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestBlocksStartWithRevealTx(t *testing.T) {
 	}
 
 	blocks, _ = GenerateChain(env.Chain.Config(), head, env.Chain.Engine(), env.DB, 1, func(n int, g *BlockGen) {
-		revealTx := &types.RevealTx{}
+		revealTx := &types.RevealTx{Key: []byte("key")}
 		g.AddTx(types.NewTx(revealTx))
 		g.AddTx(types.NewTx(revealTx))
 	})
@@ -494,11 +494,35 @@ func TestBlocksStartWithRevealTx(t *testing.T) {
 	}
 
 	blocks, _ = GenerateChain(env.Chain.Config(), head, env.Chain.Engine(), env.DB, 1, func(n int, g *BlockGen) {
-		revealTx := &types.RevealTx{}
+		revealTx := &types.RevealTx{Key: []byte("key")}
 		g.AddTx(types.NewTx(revealTx))
 	})
 	_, _, _, err = processor.Process(blocks[0], env.GetStateDB(), vm.Config{})
 	if err != nil {
 		t.Errorf("processing block failed: %v", err)
+	}
+}
+
+func TestEmptyRevealPausesShutter(t *testing.T) {
+	env := newTestEnv(t)
+
+	pausedBefore, err := IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM())
+	if err != nil {
+		t.Errorf("failed to check if shutter is paused: %v", err)
+	}
+	if pausedBefore {
+		t.Errorf("shutter is paused")
+	}
+
+	env.ExtendChain(1, func(n int, g *BlockGen) {
+		g.AddTx(types.NewTx(&types.RevealTx{}))
+	})
+
+	pausedAfter, err := IsShutterKeyperSetManagerPaused(env.Chain.Config(), env.GetEVM())
+	if err != nil {
+		t.Errorf("failed to check if shutter is paused: %v", err)
+	}
+	if !pausedAfter {
+		t.Errorf("shutter is not paused after empty reveal tx")
 	}
 }
