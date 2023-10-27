@@ -198,7 +198,7 @@ func ApplyPauseMessage(evm *vm.EVM, gp *GasPool) (*ExecutionResult, error) {
 	}
 	sender := vm.AccountRef(ShutterSystemAddress)
 	gasLimit := uint64(100_000_000)
-	ret, leftOverGas, err := evm.Call(
+	ret, _, err := evm.Call(
 		sender,
 		evm.ChainConfig().Shutter.KeyperSetManagerAddress,
 		data,
@@ -210,7 +210,7 @@ func ApplyPauseMessage(evm *vm.EVM, gp *GasPool) (*ExecutionResult, error) {
 	}
 
 	return &ExecutionResult{
-		UsedGas:    gasLimit - leftOverGas,
+		UsedGas:    0,
 		Err:        nil,
 		ReturnData: ret,
 	}, nil
