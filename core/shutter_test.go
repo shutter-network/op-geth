@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -41,6 +42,7 @@ func makeTestChainConfig() *params.ChainConfig {
 	conf.Shutter = &params.ShutterConfig{
 		KeyperSetManagerAddress:     common.HexToAddress("0x99466ED2E37B892A2Ee3E9CD55a98b68f5735db2"),
 		KeyBroadcastContractAddress: common.HexToAddress("0x946755051097d22a9383B896Fe4817bAFC867a89"),
+		InboxAddress:                common.HexToAddress("0xDCdf1e30e221CeB2ED862994FDF18b52588094Da"),
 	}
 	return &conf
 }
@@ -61,11 +63,11 @@ func newPreDeployTestEnv(t *testing.T) *testEnv {
 	chainConfig := makeTestChainConfig()
 
 	alloc := make(GenesisAlloc)
-	oneEth, ok := new(big.Int).SetString("1000000000000000000", 10)
+	tenEth, ok := new(big.Int).SetString("10000000000000000000", 10)
 	if !ok {
 		t.Fatalf("invalid genesis allocation amount")
 	}
-	alloc[deployAddress] = GenesisAccount{Balance: oneEth}
+	alloc[deployAddress] = GenesisAccount{Balance: tenEth}
 	genesis := &Genesis{
 		Config:   chainConfig,
 		GasLimit: 100000000,
@@ -162,12 +164,24 @@ func (env *testEnv) SendTransaction(unsignedTx *types.DynamicFeeTx, key *ecdsa.P
 	signer := env.GetSigner()
 	statedb := env.GetStateDB()
 
-	unsignedTx.ChainID = env.Chain.Config().ChainID
-	unsignedTx.Nonce = statedb.GetNonce(deployAddress)
-	unsignedTx.GasTipCap = new(big.Int)
-	unsignedTx.GasFeeCap = big.NewInt(1_000_000_000)
-	unsignedTx.Gas = 1_000_000
-	unsignedTx.Value = new(big.Int)
+	if unsignedTx.ChainID == nil {
+		unsignedTx.ChainID = env.Chain.Config().ChainID
+	}
+	if unsignedTx.Nonce == 0 {
+		unsignedTx.Nonce = statedb.GetNonce(deployAddress)
+	}
+	if unsignedTx.GasTipCap == nil {
+		unsignedTx.GasTipCap = new(big.Int)
+	}
+	if unsignedTx.GasFeeCap == nil {
+		unsignedTx.GasFeeCap = big.NewInt(1_000_000_000)
+	}
+	if unsignedTx.Gas == 0 {
+		unsignedTx.Gas = 10_000_000
+	}
+	if unsignedTx.Value == nil {
+		unsignedTx.Value = new(big.Int)
+	}
 
 	tx, err := types.SignTx(types.NewTx(unsignedTx), signer, deployKey)
 	if err != nil {
@@ -243,26 +257,24 @@ func (env *testEnv) DeployContracts() {
 	}
 	keyBroadcastContractReceipt := env.SendTransaction(deployKeyBroadcastContractTx, deployKey, false)
 
+	deployInboxTx := &types.DynamicFeeTx{
+		To:   nil,
+		Data: shutter.GetInboxDeployData(10_000_000),
+	}
+	inboxReceipt := env.SendTransaction(deployInboxTx, deployKey, false)
+
 	if keyperSetManagerReceipt.ContractAddress != env.Chain.Config().Shutter.KeyperSetManagerAddress {
 		env.t.Fatalf("keyper set manager deployed at unexpected address")
 	}
 	if keyBroadcastContractReceipt.ContractAddress != env.Chain.Config().Shutter.KeyBroadcastContractAddress {
 		env.t.Fatalf("key broadcast contract deployed at unexpected address")
 	}
+	if inboxReceipt.ContractAddress != env.Chain.Config().Shutter.InboxAddress {
+		env.t.Fatalf("inbox deployed at unexpected address")
+	}
 
-	pauserRole, err := getPauserRole(env.Chain.Config(), env.GetEVM())
-	if err != nil {
-		env.t.Fatalf("failed to read PAUSER_ROLE: %v", err)
-	}
-	grantPauserRoleData, err := shutter.KeyperSetManagerABI.Pack("grantRole", pauserRole, ShutterSystemAddress)
-	if err != nil {
-		env.t.Fatalf("failed to encode grantRole data: %v", err)
-	}
-	grantPauserRoleTx := &types.DynamicFeeTx{
-		To:   &env.Chain.Config().Shutter.KeyperSetManagerAddress,
-		Data: grantPauserRoleData,
-	}
-	env.SendTransaction(grantPauserRoleTx, deployKey, false)
+	env.GrantRole(&shutter.KeyperSetManagerABI, env.Chain.Config().Shutter.KeyperSetManagerAddress, "PAUSER_ROLE", ShutterSystemAddress)
+	env.GrantRole(&shutter.InboxABI, env.Chain.Config().Shutter.InboxAddress, "SEQUENCER_ROLE", ShutterSystemAddress)
 }
 
 func (env *testEnv) ScheduleKeyperSet() {
@@ -326,15 +338,31 @@ func (env *testEnv) PauseShutter() {
 	})
 }
 
-func getPauserRole(config *params.ChainConfig, evm *vm.EVM) (common.Hash, error) {
-	data, err := shutter.KeyperSetManagerABI.Pack("PAUSER_ROLE")
+func (env *testEnv) GrantRole(contractABI *abi.ABI, contractAddress common.Address, role string, address common.Address) {
+	roleHash, err := getRole(env.GetEVM(), contractABI, contractAddress, role)
+	if err != nil {
+		env.t.Fatalf("failed to get role hash: %v", err)
+	}
+	grantRoleData, err := contractABI.Pack("grantRole", roleHash, address)
+	if err != nil {
+		env.t.Fatalf("failed to encode grantRole data: %v", err)
+	}
+	grantRoleTx := &types.DynamicFeeTx{
+		To:   &contractAddress,
+		Data: grantRoleData,
+	}
+	env.SendTransaction(grantRoleTx, deployKey, false)
+}
+
+func getRole(evm *vm.EVM, contractABI *abi.ABI, contractAddress common.Address, role string) (common.Hash, error) {
+	data, err := contractABI.Pack(role)
 	if err != nil {
 		return common.Hash{}, err
 	}
 	sender := vm.AccountRef(common.Address{})
 	ret, _, err := evm.Call(
 		sender,
-		config.Shutter.KeyperSetManagerAddress,
+		contractAddress,
 		data,
 		100_000_000,
 		new(big.Int),
@@ -343,18 +371,18 @@ func getPauserRole(config *params.ChainConfig, evm *vm.EVM) (common.Hash, error)
 		return common.Hash{}, err
 	}
 
-	unpacked, err := shutter.KeyperSetManagerABI.Unpack("PAUSER_ROLE", ret)
+	unpacked, err := contractABI.Unpack(role, ret)
 	if err != nil {
 		return common.Hash{}, err
 	}
 	if len(unpacked) != 1 {
-		return common.Hash{}, fmt.Errorf("keyper set manager returned unexpected number of values")
+		return common.Hash{}, fmt.Errorf("contract returned unexpected number of values")
 	}
-	pauserRole, ok := unpacked[0].([32]byte)
+	roleHash, ok := unpacked[0].([32]byte)
 	if !ok {
-		return common.Hash{}, fmt.Errorf("keyper set manager returned unexpected type")
+		return common.Hash{}, fmt.Errorf("contract returned unexpected type")
 	}
-	return common.BytesToHash(pauserRole[:]), nil
+	return common.BytesToHash(roleHash[:]), nil
 }
 
 func TestAreShutterContractsDeployed(t *testing.T) {
