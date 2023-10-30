@@ -17,26 +17,33 @@ var keyperSetManagerFile []byte
 //go:embed abis/KeyperSet.json
 var keyperSetFile []byte
 
+//go:embed abis/Inbox.json
+var inboxFile []byte
+
 var (
 	keyBroadcastContractJSON map[string]interface{}
 	keyperSetManagerJSON     map[string]interface{}
 	keyperSetJSON            map[string]interface{}
+	inboxJSON                map[string]interface{}
 )
 
 var (
 	KeyBroadcastContractABI abi.ABI
 	KeyperSetManagerABI     abi.ABI
 	KeyperSetABI            abi.ABI
+	InboxABI                abi.ABI
 )
 
 func init() {
 	keyBroadcastContractJSON = loadJSON(keyBroacastContractFile)
 	keyperSetManagerJSON = loadJSON(keyperSetManagerFile)
 	keyperSetJSON = loadJSON(keyperSetFile)
+	inboxJSON = loadJSON(inboxFile)
 
 	KeyBroadcastContractABI = loadABI(keyBroadcastContractJSON)
 	KeyperSetManagerABI = loadABI(keyperSetManagerJSON)
 	KeyperSetABI = loadABI(keyperSetJSON)
+	InboxABI = loadABI(inboxJSON)
 }
 
 func loadJSON(s []byte) map[string]interface{} {
