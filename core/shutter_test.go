@@ -338,6 +338,23 @@ func (env *testEnv) PauseShutter() {
 	})
 }
 
+func (env *testEnv) SubmitEncryptedTransaction(block uint64, encryptedTransaction []byte, gasLimit uint64, excessFeeRecipient common.Address) {
+	data, err := shutter.InboxABI.Pack("submitEncryptedTransaction", block, encryptedTransaction, gasLimit, deployAddress)
+	if err != nil {
+		env.t.Fatalf("failed to submit encrypted tx: %v", err)
+	}
+	pointOneEth, ok := new(big.Int).SetString("100000000000000000", 10)
+	if !ok {
+		env.t.Fatalf("one")
+	}
+	tx := &types.DynamicFeeTx{
+		To:    &env.Chain.chainConfig.Shutter.InboxAddress,
+		Data:  data,
+		Value: pointOneEth,
+	}
+	env.SendTransaction(tx, deployKey, true)
+}
+
 func (env *testEnv) GrantRole(contractABI *abi.ABI, contractAddress common.Address, role string, address common.Address) {
 	roleHash, err := getRole(env.GetEVM(), contractABI, contractAddress, role)
 	if err != nil {
@@ -501,6 +518,39 @@ func TestIsShutterEnabled(t *testing.T) {
 	check(true)
 	env.PauseShutter()
 	check(false)
+}
+
+func TestGetInboxTransactions(t *testing.T) {
+	env := newTestEnv(t)
+	txs := [][]byte{
+		[]byte("tx1"),
+		[]byte("tx2"),
+		[]byte("tx3"),
+	}
+	gasLimit := uint64(100_000)
+	block := env.Chain.CurrentHeader().Number.Uint64() + 100
+	for _, tx := range txs {
+		env.SubmitEncryptedTransaction(block, tx, gasLimit, common.Address{})
+	}
+
+	txsReceived, err := GetInboxTransactions(env.GetEVM(), block)
+	if err != nil {
+		t.Fatalf("failed to get inbox transactions: %v", err)
+	}
+	if len(txsReceived) != len(txs) {
+		t.Fatalf("expected %v txs, got %d", len(txs), len(txsReceived))
+	}
+	for i := 0; i < len(txs); i++ {
+		if !bytes.Equal(txsReceived[i].EncryptedTransaction, txs[i]) {
+			t.Fatalf("submitted tx with encrypted data %v, received %v", txs[i], txsReceived[i].EncryptedTransaction)
+		}
+		if txsReceived[i].GasLimit != gasLimit {
+			t.Fatalf("submitted tx with gas limit %v, received %v", gasLimit, txsReceived[i].GasLimit)
+		}
+		if txsReceived[i].CumulativeGasLimit != uint64(i+1)*gasLimit {
+			t.Fatalf("unexpected cumulative gas limit")
+		}
+	}
 }
 
 func TestBlocksStartWithRevealTx(t *testing.T) {
