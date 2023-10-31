@@ -308,6 +308,12 @@ func (env *testEnv) BroadcastEonKey() {
 	env.SendTransaction(tx, deployKey, false)
 }
 
+func (env *testEnv) PauseShutter() {
+	env.ExtendChain(1, func(n int, g *BlockGen) {
+		g.AddTx(types.NewTx(&types.RevealTx{}))
+	})
+}
+
 func getPauserRole(config *params.ChainConfig, evm *vm.EVM) (common.Hash, error) {
 	data, err := shutter.KeyperSetManagerABI.Pack("PAUSER_ROLE")
 	if err != nil {
@@ -419,10 +425,7 @@ func TestIsKeyperSetManagerPaused(t *testing.T) {
 		t.Errorf("keyper set manager is initially paused")
 	}
 
-	// pause by sending empty reveal tx
-	env.ExtendChain(1, func(n int, g *BlockGen) {
-		g.AddTx(types.NewTx(&types.RevealTx{}))
-	})
+	env.PauseShutter()
 
 	paused, err = IsShutterKeyperSetManagerPaused(env.GetEVM())
 	if err != nil {
@@ -456,9 +459,7 @@ func TestIsShutterEnabled(t *testing.T) {
 	check(false)
 	env.BroadcastEonKey()
 	check(true)
-	env.ExtendChain(1, func(n int, g *BlockGen) {
-		g.AddTx(types.NewTx(&types.RevealTx{}))
-	})
+	env.PauseShutter()
 	check(false)
 }
 
@@ -504,9 +505,7 @@ func TestEmptyRevealPausesShutter(t *testing.T) {
 		t.Errorf("shutter is paused")
 	}
 
-	env.ExtendChain(1, func(n int, g *BlockGen) {
-		g.AddTx(types.NewTx(&types.RevealTx{}))
-	})
+	env.PauseShutter()
 
 	pausedAfter, err := IsShutterKeyperSetManagerPaused(env.GetEVM())
 	if err != nil {
