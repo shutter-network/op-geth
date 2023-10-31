@@ -209,6 +209,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		inner = new(BlobTx)
 	case DepositTxType:
 		inner = new(DepositTx)
+	case RevealTxType:
+		inner = new(RevealTx)
 	default:
 		return nil, ErrTxTypeNotSupported
 	}
