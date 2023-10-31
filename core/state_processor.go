@@ -31,6 +31,11 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
+var (
+	ErrNoRevealTx         = errors.New("no reveal tx at top of block")
+	ErrUnexpectedRevealTx = errors.New("unexpected reveal tx in block")
+)
+
 // StateProcessor is a basic Processor, which takes care of transitioning
 // state from one point to another.
 //
@@ -80,6 +85,34 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, vmenv, statedb)
 	}
+
+	isShutterEnabled, err := IsShutterEnabled(vmenv)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if isShutterEnabled {
+		if block.Transactions().Len() == 0 {
+			return nil, nil, 0, ErrNoRevealTx
+		}
+		for i, tx := range block.Transactions() {
+			if i == 0 {
+				if tx.Type() != types.RevealTxType {
+					return nil, nil, 0, ErrNoRevealTx
+				}
+			} else {
+				if tx.Type() == types.RevealTxType {
+					return nil, nil, 0, ErrUnexpectedRevealTx
+				}
+			}
+		}
+	} else {
+		for _, tx := range block.Transactions() {
+			if tx.Type() == types.RevealTxType {
+				return nil, nil, 0, ErrUnexpectedRevealTx
+			}
+		}
+	}
+
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
@@ -116,7 +149,15 @@ func applyTransaction(msg *Message, config *params.ChainConfig, gp *GasPool, sta
 	}
 
 	// Apply the transaction to the current state (included in the env).
-	result, err := ApplyMessage(evm, msg, gp)
+	var (
+		result *ExecutionResult
+		err    error
+	)
+	if tx.Type() == types.RevealTxType {
+		result, err = ApplyRevealMessage(evm, msg, gp)
+	} else {
+		result, err = ApplyMessage(evm, msg, gp)
+	}
 	if err != nil {
 		return nil, err
 	}
