@@ -234,13 +234,59 @@ func GetSubmittedEncryptedTransactions(evm *vm.EVM, blockNumber uint64) ([]Encry
 	return txs, nil
 }
 
+func ClearSubmittedEncryptedTransactions(evm *vm.EVM) error {
+	data, err := shutter.InboxABI.Pack("clear")
+	if err != nil {
+		return err
+	}
+	sender := vm.AccountRef(ShutterSystemAddress)
+	ret, _, err := evm.Call(
+		sender,
+		evm.ChainConfig().Shutter.InboxAddress,
+		data,
+		100_000_000,
+		new(big.Int),
+	)
+	if err != nil {
+		return err
+	}
+	if len(ret) > 0 {
+		return fmt.Errorf("inbox returned value unexpectedly")
+	}
+	return nil
+}
+
 func ApplyRevealMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, error) {
+	var (
+		err    error
+		result *ExecutionResult
+	)
+
 	key := msg.Data
 	if len(key) == 0 {
-		return ApplyPauseMessage(evm, gp)
+		result, err = ApplyPauseMessage(evm, gp)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		result = &ExecutionResult{
+			UsedGas:    0,
+			Err:        nil,
+			ReturnData: []byte{},
+		}
 	}
 
-	return &ExecutionResult{}, nil
+	isShutterEnabled, err := IsShutterEnabled(evm)
+	if err != nil {
+		return nil, err
+	}
+	if isShutterEnabled {
+		if err := ClearSubmittedEncryptedTransactions(evm); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
 }
 
 func ApplyPauseMessage(evm *vm.EVM, gp *GasPool) (*ExecutionResult, error) {
@@ -266,4 +312,17 @@ func ApplyPauseMessage(evm *vm.EVM, gp *GasPool) (*ExecutionResult, error) {
 		Err:        nil,
 		ReturnData: ret,
 	}, nil
+}
+
+func ShutterBlockPostProcess(evm *vm.EVM) error {
+	isShutterEnabled, err := IsShutterEnabled(evm)
+	if err != nil {
+		return err
+	}
+	if isShutterEnabled {
+		if err := ClearSubmittedEncryptedTransactions(evm); err != nil {
+			return err
+		}
+	}
+	return nil
 }
