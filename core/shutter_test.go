@@ -553,6 +553,40 @@ func TestGetInboxTransactions(t *testing.T) {
 	}
 }
 
+func TestInboxTransactionsAreCleared(t *testing.T) {
+	env := newTestEnv(t)
+	txs := [][]byte{
+		[]byte("tx1"),
+		[]byte("tx2"),
+		[]byte("tx3"),
+	}
+	gasLimit := uint64(100_000)
+	dBlock := uint64(10)
+	block := env.Chain.CurrentHeader().Number.Uint64() + dBlock
+	for _, tx := range txs {
+		env.SubmitEncryptedTransaction(block, tx, gasLimit, common.Address{})
+	}
+	txsSubmitted, err := GetInboxTransactions(env.GetEVM(), block)
+	if err != nil {
+		t.Fatalf("failed to get inbox transactions: %v", err)
+	}
+	if len(txsSubmitted) == 0 {
+		t.Fatalf("no transactions were submitted")
+	}
+
+	env.ExtendChain(int(dBlock), func(i int, g *BlockGen) {
+		g.AddTx(types.NewTx(&types.RevealTx{Key: []byte("key")}))
+	})
+
+	txsReceived, err := GetInboxTransactions(env.GetEVM(), block)
+	if err != nil {
+		t.Fatalf("failed to get inbox transactions: %v", err)
+	}
+	if len(txsReceived) != 0 {
+		t.Fatalf("transactions didn't get cleared")
+	}
+}
+
 func TestBlocksStartWithRevealTx(t *testing.T) {
 	env := newTestEnv(t)
 	processor := NewStateProcessor(env.Chain.Config(), env.Chain, env.Chain.Engine())
