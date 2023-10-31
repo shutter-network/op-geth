@@ -321,6 +321,7 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 		if gen != nil {
 			gen(i, b)
 		}
+
 		if b.engine != nil {
 			block, err := b.engine.FinalizeAndAssemble(chainreader, b.header, statedb, b.txs, b.uncles, b.receipts, b.withdrawals)
 			if err != nil {
