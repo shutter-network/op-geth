@@ -136,6 +136,18 @@ func (env *testEnv) GetSigner() types.Signer {
 
 func (env *testEnv) ExtendChain(n int, gen func(int, *BlockGen)) ([]*types.Block, []types.Receipts) {
 	head := env.Chain.GetBlockByHash(env.Chain.CurrentBlock().Hash())
+	if gen == nil {
+		gen = func(i int, g *BlockGen) {
+			evm := env.GetEVM()
+			shutterEnabled, err := IsShutterEnabled(evm)
+			if err != nil {
+				env.t.Fatalf("failed to check if shutter is enabled: %v", err)
+			}
+			if shutterEnabled {
+				g.AddTx(types.NewTx(&types.RevealTx{Key: []byte("key")}))
+			}
+		}
+	}
 	blocks, receipts := GenerateChain(env.Chain.Config(), head, env.Chain.Engine(), env.DB, n, gen)
 	_, err := env.Chain.InsertChain(blocks)
 	if err != nil {
