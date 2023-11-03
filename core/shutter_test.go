@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -41,6 +42,7 @@ func makeTestChainConfig() *params.ChainConfig {
 	conf.Shutter = &params.ShutterConfig{
 		KeyperSetManagerAddress:     common.HexToAddress("0x99466ED2E37B892A2Ee3E9CD55a98b68f5735db2"),
 		KeyBroadcastContractAddress: common.HexToAddress("0x946755051097d22a9383B896Fe4817bAFC867a89"),
+		InboxAddress:                common.HexToAddress("0xDCdf1e30e221CeB2ED862994FDF18b52588094Da"),
 	}
 	return &conf
 }
@@ -61,11 +63,11 @@ func newPreDeployTestEnv(t *testing.T) *testEnv {
 	chainConfig := makeTestChainConfig()
 
 	alloc := make(GenesisAlloc)
-	oneEth, ok := new(big.Int).SetString("1000000000000000000", 10)
+	tenEth, ok := new(big.Int).SetString("10000000000000000000", 10)
 	if !ok {
 		t.Fatalf("invalid genesis allocation amount")
 	}
-	alloc[deployAddress] = GenesisAccount{Balance: oneEth}
+	alloc[deployAddress] = GenesisAccount{Balance: tenEth}
 	genesis := &Genesis{
 		Config:   chainConfig,
 		GasLimit: 100000000,
@@ -162,12 +164,24 @@ func (env *testEnv) SendTransaction(unsignedTx *types.DynamicFeeTx, key *ecdsa.P
 	signer := env.GetSigner()
 	statedb := env.GetStateDB()
 
-	unsignedTx.ChainID = env.Chain.Config().ChainID
-	unsignedTx.Nonce = statedb.GetNonce(deployAddress)
-	unsignedTx.GasTipCap = new(big.Int)
-	unsignedTx.GasFeeCap = big.NewInt(1_000_000_000)
-	unsignedTx.Gas = 1_000_000
-	unsignedTx.Value = new(big.Int)
+	if unsignedTx.ChainID == nil {
+		unsignedTx.ChainID = env.Chain.Config().ChainID
+	}
+	if unsignedTx.Nonce == 0 {
+		unsignedTx.Nonce = statedb.GetNonce(deployAddress)
+	}
+	if unsignedTx.GasTipCap == nil {
+		unsignedTx.GasTipCap = new(big.Int)
+	}
+	if unsignedTx.GasFeeCap == nil {
+		unsignedTx.GasFeeCap = big.NewInt(1_000_000_000)
+	}
+	if unsignedTx.Gas == 0 {
+		unsignedTx.Gas = 10_000_000
+	}
+	if unsignedTx.Value == nil {
+		unsignedTx.Value = new(big.Int)
+	}
 
 	tx, err := types.SignTx(types.NewTx(unsignedTx), signer, deployKey)
 	if err != nil {
@@ -243,26 +257,24 @@ func (env *testEnv) DeployContracts() {
 	}
 	keyBroadcastContractReceipt := env.SendTransaction(deployKeyBroadcastContractTx, deployKey, false)
 
+	deployInboxTx := &types.DynamicFeeTx{
+		To:   nil,
+		Data: shutter.GetInboxDeployData(10_000_000),
+	}
+	inboxReceipt := env.SendTransaction(deployInboxTx, deployKey, false)
+
 	if keyperSetManagerReceipt.ContractAddress != env.Chain.Config().Shutter.KeyperSetManagerAddress {
 		env.t.Fatalf("keyper set manager deployed at unexpected address")
 	}
 	if keyBroadcastContractReceipt.ContractAddress != env.Chain.Config().Shutter.KeyBroadcastContractAddress {
 		env.t.Fatalf("key broadcast contract deployed at unexpected address")
 	}
+	if inboxReceipt.ContractAddress != env.Chain.Config().Shutter.InboxAddress {
+		env.t.Fatalf("inbox deployed at unexpected address")
+	}
 
-	pauserRole, err := getPauserRole(env.Chain.Config(), env.GetEVM())
-	if err != nil {
-		env.t.Fatalf("failed to read PAUSER_ROLE: %v", err)
-	}
-	grantPauserRoleData, err := shutter.KeyperSetManagerABI.Pack("grantRole", pauserRole, ShutterSystemAddress)
-	if err != nil {
-		env.t.Fatalf("failed to encode grantRole data: %v", err)
-	}
-	grantPauserRoleTx := &types.DynamicFeeTx{
-		To:   &env.Chain.Config().Shutter.KeyperSetManagerAddress,
-		Data: grantPauserRoleData,
-	}
-	env.SendTransaction(grantPauserRoleTx, deployKey, false)
+	env.GrantRole(&shutter.KeyperSetManagerABI, env.Chain.Config().Shutter.KeyperSetManagerAddress, "PAUSER_ROLE", ShutterSystemAddress)
+	env.GrantRole(&shutter.InboxABI, env.Chain.Config().Shutter.InboxAddress, "SEQUENCER_ROLE", ShutterSystemAddress)
 }
 
 func (env *testEnv) ScheduleKeyperSet() {
@@ -326,15 +338,48 @@ func (env *testEnv) PauseShutter() {
 	})
 }
 
-func getPauserRole(config *params.ChainConfig, evm *vm.EVM) (common.Hash, error) {
-	data, err := shutter.KeyperSetManagerABI.Pack("PAUSER_ROLE")
+func (env *testEnv) SubmitEncryptedTransaction(block uint64, encryptedTransaction []byte, gasLimit uint64, excessFeeRecipient common.Address) {
+	data, err := shutter.InboxABI.Pack("submitEncryptedTransaction", block, encryptedTransaction, gasLimit, deployAddress)
+	if err != nil {
+		env.t.Fatalf("failed to submit encrypted tx: %v", err)
+	}
+	pointOneEth, ok := new(big.Int).SetString("100000000000000000", 10)
+	if !ok {
+		env.t.Fatalf("one")
+	}
+	tx := &types.DynamicFeeTx{
+		To:    &env.Chain.chainConfig.Shutter.InboxAddress,
+		Data:  data,
+		Value: pointOneEth,
+	}
+	env.SendTransaction(tx, deployKey, true)
+}
+
+func (env *testEnv) GrantRole(contractABI *abi.ABI, contractAddress common.Address, role string, address common.Address) {
+	roleHash, err := getRole(env.GetEVM(), contractABI, contractAddress, role)
+	if err != nil {
+		env.t.Fatalf("failed to get role hash: %v", err)
+	}
+	grantRoleData, err := contractABI.Pack("grantRole", roleHash, address)
+	if err != nil {
+		env.t.Fatalf("failed to encode grantRole data: %v", err)
+	}
+	grantRoleTx := &types.DynamicFeeTx{
+		To:   &contractAddress,
+		Data: grantRoleData,
+	}
+	env.SendTransaction(grantRoleTx, deployKey, false)
+}
+
+func getRole(evm *vm.EVM, contractABI *abi.ABI, contractAddress common.Address, role string) (common.Hash, error) {
+	data, err := contractABI.Pack(role)
 	if err != nil {
 		return common.Hash{}, err
 	}
 	sender := vm.AccountRef(common.Address{})
 	ret, _, err := evm.Call(
 		sender,
-		config.Shutter.KeyperSetManagerAddress,
+		contractAddress,
 		data,
 		100_000_000,
 		new(big.Int),
@@ -343,18 +388,18 @@ func getPauserRole(config *params.ChainConfig, evm *vm.EVM) (common.Hash, error)
 		return common.Hash{}, err
 	}
 
-	unpacked, err := shutter.KeyperSetManagerABI.Unpack("PAUSER_ROLE", ret)
+	unpacked, err := contractABI.Unpack(role, ret)
 	if err != nil {
 		return common.Hash{}, err
 	}
 	if len(unpacked) != 1 {
-		return common.Hash{}, fmt.Errorf("keyper set manager returned unexpected number of values")
+		return common.Hash{}, fmt.Errorf("contract returned unexpected number of values")
 	}
-	pauserRole, ok := unpacked[0].([32]byte)
+	roleHash, ok := unpacked[0].([32]byte)
 	if !ok {
-		return common.Hash{}, fmt.Errorf("keyper set manager returned unexpected type")
+		return common.Hash{}, fmt.Errorf("contract returned unexpected type")
 	}
-	return common.BytesToHash(pauserRole[:]), nil
+	return common.BytesToHash(roleHash[:]), nil
 }
 
 func TestAreShutterContractsDeployed(t *testing.T) {
@@ -473,6 +518,73 @@ func TestIsShutterEnabled(t *testing.T) {
 	check(true)
 	env.PauseShutter()
 	check(false)
+}
+
+func TestGetSubmittedEncryptedTransactions(t *testing.T) {
+	env := newTestEnv(t)
+	txs := [][]byte{
+		[]byte("tx1"),
+		[]byte("tx2"),
+		[]byte("tx3"),
+	}
+	gasLimit := uint64(100_000)
+	block := env.Chain.CurrentHeader().Number.Uint64() + 100
+	for _, tx := range txs {
+		env.SubmitEncryptedTransaction(block, tx, gasLimit, common.Address{})
+	}
+
+	txsReceived, err := GetSubmittedEncryptedTransactions(env.GetEVM(), block)
+	if err != nil {
+		t.Fatalf("failed to get inbox transactions: %v", err)
+	}
+	if len(txsReceived) != len(txs) {
+		t.Fatalf("expected %v txs, got %d", len(txs), len(txsReceived))
+	}
+	for i := 0; i < len(txs); i++ {
+		if !bytes.Equal(txsReceived[i].EncryptedTransaction, txs[i]) {
+			t.Fatalf("submitted tx with encrypted data %v, received %v", txs[i], txsReceived[i].EncryptedTransaction)
+		}
+		if txsReceived[i].GasLimit != gasLimit {
+			t.Fatalf("submitted tx with gas limit %v, received %v", gasLimit, txsReceived[i].GasLimit)
+		}
+		if txsReceived[i].CumulativeGasLimit != uint64(i+1)*gasLimit {
+			t.Fatalf("unexpected cumulative gas limit")
+		}
+	}
+}
+
+func TestSubmittedEncryptedTransactionsAreCleared(t *testing.T) {
+	env := newTestEnv(t)
+	txs := [][]byte{
+		[]byte("tx1"),
+		[]byte("tx2"),
+		[]byte("tx3"),
+	}
+	gasLimit := uint64(100_000)
+	dBlock := uint64(10)
+	block := env.Chain.CurrentHeader().Number.Uint64() + dBlock
+	for _, tx := range txs {
+		env.SubmitEncryptedTransaction(block, tx, gasLimit, common.Address{})
+	}
+	txsSubmitted, err := GetSubmittedEncryptedTransactions(env.GetEVM(), block)
+	if err != nil {
+		t.Fatalf("failed to get inbox transactions: %v", err)
+	}
+	if len(txsSubmitted) == 0 {
+		t.Fatalf("no transactions were submitted")
+	}
+
+	env.ExtendChain(int(dBlock), func(i int, g *BlockGen) {
+		g.AddTx(types.NewTx(&types.RevealTx{Key: []byte("key")}))
+	})
+
+	txsReceived, err := GetSubmittedEncryptedTransactions(env.GetEVM(), block)
+	if err != nil {
+		t.Fatalf("failed to get inbox transactions: %v", err)
+	}
+	if len(txsReceived) != 0 {
+		t.Fatalf("transactions didn't get cleared")
+	}
 }
 
 func TestBlocksStartWithRevealTx(t *testing.T) {
