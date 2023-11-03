@@ -413,6 +413,7 @@ func (o *OptimismConfig) String() string {
 type ShutterConfig struct {
 	KeyperSetManagerAddress     common.Address `json:"keyperSetManagerAddress"`
 	KeyBroadcastContractAddress common.Address `json:"keyBroadcastContractAddress"`
+	InboxAddress                common.Address `json:"inboxAddress"`
 }
 
 // String implements the stringer interface, returning the shutter config details.

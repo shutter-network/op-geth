@@ -22,6 +22,15 @@ func GetKeyperSetDeployData() []byte {
 	return getBytecode(keyperSetJSON)
 }
 
+func GetInboxDeployData(blockGasLimit uint64) []byte {
+	bytecode := getBytecode(inboxJSON)
+	args, err := InboxABI.Pack("", blockGasLimit)
+	if err != nil {
+		panic(err)
+	}
+	return append(bytecode, args...)
+}
+
 func getBytecode(json map[string]interface{}) []byte {
 	d := json["bytecode"].(map[string]interface{})
 	h := d["object"].(string)
