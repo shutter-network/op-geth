@@ -206,7 +206,7 @@ func (env *testEnv) SendTransaction(unsignedTx *types.DynamicFeeTx, key *ecdsa.P
 
 	receipt := receipts[0][numExpectedReceipts-1]
 	if receipt.Status == types.ReceiptStatusFailed {
-		env.t.Fatalf("transaction failed")
+		env.t.Fatalf("transaction failed: %+v", receipt)
 	}
 	return receipt
 }
@@ -247,7 +247,7 @@ func (env *testEnv) DeployContract(data []byte) *types.Receipt {
 func (env *testEnv) DeployContracts() {
 	deployKeyperSetManagerTx := &types.DynamicFeeTx{
 		To:   nil,
-		Data: shutter.GetKeyperSetManagerDeployData(),
+		Data: shutter.GetKeyperSetManagerDeployData(&deployAddress, &deployAddress),
 	}
 	keyperSetManagerReceipt := env.SendTransaction(deployKeyperSetManagerTx, deployKey, false)
 
@@ -259,7 +259,7 @@ func (env *testEnv) DeployContracts() {
 
 	deployInboxTx := &types.DynamicFeeTx{
 		To:   nil,
-		Data: shutter.GetInboxDeployData(10_000_000),
+		Data: shutter.GetInboxDeployData(10_000_000, &deployAddress, &deployAddress),
 	}
 	inboxReceipt := env.SendTransaction(deployInboxTx, deployKey, false)
 
