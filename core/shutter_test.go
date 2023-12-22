@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/rand"
 	"fmt"
 	"math/big"
 	"testing"
@@ -18,13 +19,17 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/shutter-network/shutter/shlib/shcrypto"
 )
 
 var (
 	deployKey     *ecdsa.PrivateKey
 	deployAddress common.Address
 	deploySigner  types.Signer
+
+	testKeyGen *shcrypto.TestKeyGen
 )
 
 func init() {
@@ -51,7 +56,7 @@ type testEnv struct {
 	DB    ethdb.Database
 	Chain *BlockChain
 
-	EonKey []byte
+	TestKeyGen *shcrypto.TestKeyGen
 
 	t *testing.T
 }
@@ -84,13 +89,16 @@ func newPreDeployTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("failed to create blockchain: %v", err)
 	}
 
+	testKeyGen, err := shcrypto.NewTestKeyGen()
+	if err != nil {
+		t.Fatalf("failed to create testkeygen: %v", err)
+	}
+
 	return &testEnv{
-		DB:    db,
-		Chain: chain,
-
-		EonKey: []byte("key"),
-
-		t: t,
+		DB:         db,
+		Chain:      chain,
+		TestKeyGen: testKeyGen,
+		t:          t,
 	}
 }
 
@@ -136,6 +144,16 @@ func (env *testEnv) GetSigner() types.Signer {
 	)
 }
 
+func (env *testEnv) ComputeDecryptionKey(blockNumber uint64) *shcrypto.EpochSecretKey {
+	identityPreimage := ComputeIdentityPreimage(blockNumber)
+	epochID := shcrypto.ComputeEpochID(identityPreimage)
+	key, err := env.TestKeyGen.ComputeEpochSecretKey(epochID)
+	if err != nil {
+		env.t.Fatalf("failed to compute decryption key: %v", err)
+	}
+	return key
+}
+
 func (env *testEnv) ExtendChain(n int, gen func(int, *BlockGen)) ([]*types.Block, []types.Receipts) {
 	head := env.Chain.GetBlockByHash(env.Chain.CurrentBlock().Hash())
 	if gen == nil {
@@ -146,7 +164,8 @@ func (env *testEnv) ExtendChain(n int, gen func(int, *BlockGen)) ([]*types.Block
 				env.t.Fatalf("failed to check if shutter is enabled: %v", err)
 			}
 			if shutterEnabled {
-				g.AddTx(types.NewTx(&types.RevealTx{Key: []byte("key")}))
+				key := env.ComputeDecryptionKey(g.header.Number.Uint64())
+				g.AddTx(types.NewTx(&types.RevealTx{Key: key.Marshal()}))
 			}
 		}
 	}
@@ -189,7 +208,8 @@ func (env *testEnv) SendTransaction(unsignedTx *types.DynamicFeeTx, key *ecdsa.P
 	}
 	_, receipts := env.ExtendChain(1, func(n int, g *BlockGen) {
 		if shutterEnabled {
-			g.AddTx(types.NewTx(&types.RevealTx{Key: []byte("key")}))
+			key := env.ComputeDecryptionKey(g.header.Number.Uint64())
+			g.AddTx(types.NewTx(&types.RevealTx{Key: key.Marshal()}))
 		}
 		g.AddTx(tx)
 	})
@@ -321,7 +341,7 @@ func (env *testEnv) ScheduleKeyperSet() {
 }
 
 func (env *testEnv) BroadcastEonKey() {
-	data, err := shutter.KeyBroadcastContractABI.Pack("broadcastEonKey", uint64(0), env.EonKey)
+	data, err := shutter.KeyBroadcastContractABI.Pack("broadcastEonKey", uint64(0), env.TestKeyGen.EonPublicKey.Marshal())
 	if err != nil {
 		env.t.Fatalf("failed to encode broadcastEonKey data: %v", err)
 	}
@@ -345,7 +365,7 @@ func (env *testEnv) SubmitEncryptedTransaction(block uint64, encryptedTransactio
 	}
 	pointOneEth, ok := new(big.Int).SetString("100000000000000000", 10)
 	if !ok {
-		env.t.Fatalf("one")
+		env.t.Fatalf("invalid decimal integer")
 	}
 	tx := &types.DynamicFeeTx{
 		To:    &env.Chain.chainConfig.Shutter.InboxAddress,
@@ -467,7 +487,7 @@ func TestGetCurrentEonKey(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to get eon key")
 	}
-	if !bytes.Equal(key, env.EonKey) {
+	if !bytes.Equal(key, env.TestKeyGen.EonPublicKey.Marshal()) {
 		t.Errorf("got unexpected eon key")
 	}
 }
@@ -574,9 +594,7 @@ func TestSubmittedEncryptedTransactionsAreCleared(t *testing.T) {
 		t.Fatalf("no transactions were submitted")
 	}
 
-	env.ExtendChain(int(dBlock), func(i int, g *BlockGen) {
-		g.AddTx(types.NewTx(&types.RevealTx{Key: []byte("key")}))
-	})
+	env.ExtendChain(int(dBlock), nil)
 
 	txsReceived, err := GetSubmittedEncryptedTransactions(env.GetEVM(), block)
 	if err != nil {
@@ -599,7 +617,8 @@ func TestBlocksStartWithRevealTx(t *testing.T) {
 	}
 
 	blocks, _ = GenerateChain(env.Chain.Config(), head, env.Chain.Engine(), env.DB, 1, func(n int, g *BlockGen) {
-		revealTx := &types.RevealTx{Key: []byte("key")}
+		key := env.ComputeDecryptionKey(g.header.Number.Uint64())
+		revealTx := &types.RevealTx{Key: key.Marshal()}
 		g.AddTx(types.NewTx(revealTx))
 		g.AddTx(types.NewTx(revealTx))
 	})
@@ -609,7 +628,8 @@ func TestBlocksStartWithRevealTx(t *testing.T) {
 	}
 
 	blocks, _ = GenerateChain(env.Chain.Config(), head, env.Chain.Engine(), env.DB, 1, func(n int, g *BlockGen) {
-		revealTx := &types.RevealTx{Key: []byte("key")}
+		key := env.ComputeDecryptionKey(g.header.Number.Uint64())
+		revealTx := &types.RevealTx{Key: key.Marshal()}
 		g.AddTx(types.NewTx(revealTx))
 	})
 	_, _, _, err = processor.Process(blocks[0], env.GetStateDB(), vm.Config{})
@@ -637,5 +657,114 @@ func TestEmptyRevealPausesShutter(t *testing.T) {
 	}
 	if !pausedAfter {
 		t.Errorf("shutter is not paused after empty reveal tx")
+	}
+}
+
+func TestTransactionDecryption(t *testing.T) {
+	env := newTestEnv(t)
+	decryptedTx := DecryptedTransaction{
+		To:    deployAddress,
+		Data:  []byte("data"),
+		Value: big.NewInt(5),
+	}
+	decryptedTxBytesWithoutPrefix, err := rlp.EncodeToBytes(decryptedTx)
+	if err != nil {
+		t.Fatalf("failed to RLP encode tx: %v", err)
+	}
+	decryptedTxBytes := append([]byte{0}, decryptedTxBytesWithoutPrefix...)
+	blockNumber := uint64(0)
+	identityPreimage := ComputeIdentityPreimage(blockNumber)
+	identity := shcrypto.ComputeEpochID(identityPreimage)
+
+	sigma, err := shcrypto.RandomSigma(rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to get random sigma: %v", err)
+	}
+	encryptedTxBytes := shcrypto.Encrypt(decryptedTxBytes, env.TestKeyGen.EonPublicKey, identity, sigma).Marshal()
+	encryptedTx := EncryptedTransaction{
+		EncryptedTransaction: encryptedTxBytes,
+	}
+	decryptedTx2, err := encryptedTx.GetDecryptedTransaction(env.ComputeDecryptionKey(blockNumber))
+	if err != nil {
+		t.Fatalf("failed to decrypt tx: %v", err)
+	}
+	if !bytes.Equal(decryptedTx2.To.Bytes(), decryptedTx.To.Bytes()) {
+		t.Errorf("unexpected receiver after decryption")
+	}
+	if !bytes.Equal(decryptedTx2.Data, decryptedTx.Data) {
+		t.Errorf("unexpected data after decryption")
+	}
+	if decryptedTx2.Value.Cmp(decryptedTx.Value) != 0 {
+		t.Errorf("unexpected value after decryption")
+	}
+}
+
+func TestBlocksValidateDecryptionKey(t *testing.T) {
+	env := newTestEnv(t)
+	head := env.Chain.GetBlockByHash(env.Chain.CurrentBlock().Hash())
+	nextBlockNumber := head.Number().Uint64() + 1
+
+	invalidKeys := [][]byte{
+		[]byte("key"),
+		env.ComputeDecryptionKey(nextBlockNumber - 1).Marshal(),
+		env.ComputeDecryptionKey(nextBlockNumber + 1).Marshal(),
+	}
+	for _, key := range invalidKeys {
+		func() {
+			defer func() {
+				err := recover()
+				fmt.Println("recovered error:", err)
+				if err == nil {
+					t.Errorf("expected invalid decryption key error")
+				}
+			}()
+
+			GenerateChain(env.Chain.Config(), head, env.Chain.Engine(), env.DB, 1, func(n int, g *BlockGen) {
+				revealTx := &types.RevealTx{Key: key}
+				g.AddTx(types.NewTx(revealTx))
+			})
+		}()
+	}
+}
+
+func TestInvalidEncryptedTransaction(t *testing.T) {
+	env := newTestEnv(t)
+	block := env.Chain.CurrentHeader().Number.Uint64() + 2
+	env.SubmitEncryptedTransaction(block, []byte("invalid"), 100_000, deployAddress)
+	env.ExtendChain(1, nil)
+	// TODO: check receipt
+}
+
+func TestEncryptedTransactionExecution(t *testing.T) {
+	env := newTestEnv(t)
+	block := env.Chain.CurrentHeader().Number.Uint64() + 2
+	to := common.BigToAddress(common.Big1)
+	balanceBefore := env.GetEVM().StateDB.GetBalance(to)
+
+	decryptedTx := DecryptedTransaction{
+		To:    to,
+		Data:  []byte{},
+		Value: big.NewInt(1),
+	}
+	decryptedTxBytesWithoutPrefix, err := rlp.EncodeToBytes(decryptedTx)
+	if err != nil {
+		t.Fatalf("failed to RLP encode tx: %v", err)
+	}
+	decryptedTxBytes := append([]byte{0}, decryptedTxBytesWithoutPrefix...)
+
+	identityPreimage := ComputeIdentityPreimage(block)
+	identity := shcrypto.ComputeEpochID(identityPreimage)
+	sigma, err := shcrypto.RandomSigma(rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to get random sigma: %v", err)
+	}
+	encryptedTx := shcrypto.Encrypt(decryptedTxBytes, env.TestKeyGen.EonPublicKey, identity, sigma).Marshal()
+	env.SubmitEncryptedTransaction(block, encryptedTx, 100_000, deployAddress)
+
+	env.ExtendChain(1, nil)
+
+	balanceAfter := env.GetEVM().StateDB.GetBalance(to)
+	if new(big.Int).Add(balanceBefore, decryptedTx.Value).Cmp(balanceAfter) != 0 {
+		t.Errorf("balance not updated")
 	}
 }
