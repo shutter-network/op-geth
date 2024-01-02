@@ -353,9 +353,17 @@ func (env *testEnv) BroadcastEonKey() {
 }
 
 func (env *testEnv) PauseShutter() {
-	env.ExtendChain(1, func(n int, g *BlockGen) {
+	_, receipts := env.ExtendChain(1, func(n int, g *BlockGen) {
 		g.AddTx(types.NewTx(&types.RevealTx{}))
 	})
+	revealRecord := RevealRecord{}
+	err := rlp.DecodeBytes(receipts[0][0].Logs[1].Data, &revealRecord)
+	if err != nil {
+		env.t.Fatalf("failed to decode reveal record: %v", err)
+	}
+	if len(revealRecord.DecryptionKey) != 0 {
+		env.t.Errorf("reveal record contains non-empty decryption key %X", revealRecord.DecryptionKey)
+	}
 }
 
 func (env *testEnv) SubmitEncryptedTransaction(block uint64, encryptedTransaction []byte, gasLimit uint64, excessFeeRecipient common.Address) {
@@ -731,8 +739,35 @@ func TestInvalidEncryptedTransaction(t *testing.T) {
 	env := newTestEnv(t)
 	block := env.Chain.CurrentHeader().Number.Uint64() + 2
 	env.SubmitEncryptedTransaction(block, []byte("invalid"), 100_000, deployAddress)
-	env.ExtendChain(1, nil)
-	// TODO: check receipt
+	_, receipts := env.ExtendChain(1, nil)
+
+	if len(receipts[0]) != 1 {
+		t.Fatalf("got %d receipts, expected %d", len(receipts[0]), 1)
+	}
+	logs := receipts[0][0].Logs
+	if len(logs) != 1 {
+		t.Fatalf("got %d logs, expected %d", len(logs), 1)
+	}
+
+	revealRecord := RevealRecord{}
+	err := rlp.DecodeBytes(logs[0].Data, &revealRecord)
+	if err != nil {
+		t.Fatalf("failed to decode reveal record")
+	}
+	if len(revealRecord.TransactionRecords) != 1 {
+		t.Fatalf("got %d transaction records, expected %d", len(logs), 1)
+	}
+	txRecord := revealRecord.TransactionRecords[0]
+
+	if txRecord.CumulativeGasUsed != 0 {
+		t.Errorf("failed tx used %d gas instead of 0", txRecord.CumulativeGasUsed)
+	}
+	if txRecord.CumulativeLogs != 0 {
+		t.Errorf("failed tx emitted %d logs instead of 0", txRecord.CumulativeLogs)
+	}
+	if txRecord.Status != RevealedTransactionRecordStatusDecryptionFailed {
+		t.Errorf("failed tx has status %d instead of %d", txRecord.Status, RevealedTransactionRecordStatusDecryptionFailed)
+	}
 }
 
 func TestEncryptedTransactionExecution(t *testing.T) {
@@ -761,10 +796,95 @@ func TestEncryptedTransactionExecution(t *testing.T) {
 	encryptedTx := shcrypto.Encrypt(decryptedTxBytes, env.TestKeyGen.EonPublicKey, identity, sigma).Marshal()
 	env.SubmitEncryptedTransaction(block, encryptedTx, 100_000, deployAddress)
 
-	env.ExtendChain(1, nil)
+	_, receipts := env.ExtendChain(1, nil)
 
 	balanceAfter := env.GetEVM().StateDB.GetBalance(to)
 	if new(big.Int).Add(balanceBefore, decryptedTx.Value).Cmp(balanceAfter) != 0 {
 		t.Errorf("balance not updated")
+	}
+
+	if len(receipts[0]) != 1 {
+		t.Fatalf("got %d receipts, expected %d", len(receipts[0]), 1)
+	}
+	logs := receipts[0][0].Logs
+	if len(logs) != 1 {
+		t.Fatalf("got %d logs, expected %d", len(logs), 1)
+	}
+
+	revealRecord := RevealRecord{}
+	err = rlp.DecodeBytes(logs[0].Data, &revealRecord)
+	if err != nil {
+		t.Fatalf("failed to decode reveal record")
+	}
+	if len(revealRecord.TransactionRecords) != 1 {
+		t.Fatalf("got %d transaction records, expected %d", len(logs), 1)
+	}
+	txRecord := revealRecord.TransactionRecords[0]
+
+	if txRecord.CumulativeGasUsed == 0 {
+		t.Errorf("tx used 0 gas")
+	}
+	if txRecord.CumulativeLogs != 0 {
+		t.Errorf("tx emitted %d logs instead of 0", txRecord.CumulativeLogs)
+	}
+	if txRecord.Status != RevealedTransactionRecordStatusSuccess {
+		t.Errorf("tx has status %d instead of %d", txRecord.Status, RevealedTransactionRecordStatusSuccess)
+	}
+}
+
+func TestEncryptedTransactionExecutionFailed(t *testing.T) {
+	env := newTestEnv(t)
+	block := env.Chain.CurrentHeader().Number.Uint64() + 2
+	to := common.BigToAddress(common.Big1)
+	value := new(big.Int).Add(env.GetEVM().StateDB.GetBalance(deployAddress), big.NewInt(1))
+
+	decryptedTx := DecryptedTransaction{
+		To:    to,
+		Data:  []byte{},
+		Value: value,
+	}
+	decryptedTxBytesWithoutPrefix, err := rlp.EncodeToBytes(decryptedTx)
+	if err != nil {
+		t.Fatalf("failed to RLP encode tx: %v", err)
+	}
+	decryptedTxBytes := append([]byte{0}, decryptedTxBytesWithoutPrefix...)
+
+	identityPreimage := ComputeIdentityPreimage(block)
+	identity := shcrypto.ComputeEpochID(identityPreimage)
+	sigma, err := shcrypto.RandomSigma(rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to get random sigma: %v", err)
+	}
+	encryptedTx := shcrypto.Encrypt(decryptedTxBytes, env.TestKeyGen.EonPublicKey, identity, sigma).Marshal()
+	env.SubmitEncryptedTransaction(block, encryptedTx, 100_000, deployAddress)
+
+	_, receipts := env.ExtendChain(1, nil)
+
+	if len(receipts[0]) != 1 {
+		t.Fatalf("got %d receipts, expected %d", len(receipts[0]), 1)
+	}
+	logs := receipts[0][0].Logs
+	if len(logs) != 1 {
+		t.Fatalf("got %d logs, expected %d", len(logs), 1)
+	}
+
+	revealRecord := RevealRecord{}
+	err = rlp.DecodeBytes(logs[0].Data, &revealRecord)
+	if err != nil {
+		t.Fatalf("failed to decode reveal record")
+	}
+	if len(revealRecord.TransactionRecords) != 1 {
+		t.Fatalf("got %d transaction records, expected %d", len(logs), 1)
+	}
+	txRecord := revealRecord.TransactionRecords[0]
+
+	if txRecord.CumulativeGasUsed != 0 {
+		t.Errorf("failed tx used %d gas instead of 0", txRecord.CumulativeGasUsed)
+	}
+	if txRecord.CumulativeLogs != 0 {
+		t.Errorf("failed tx emitted %d logs instead of 0", txRecord.CumulativeLogs)
+	}
+	if txRecord.Status != RevealedTransactionRecordStatusExecutionFailed {
+		t.Errorf("failed tx has status %d instead of %d", txRecord.Status, RevealedTransactionRecordStatusExecutionFailed)
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/shutter"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -63,6 +64,23 @@ func (tx *EncryptedTransaction) GetDecryptedTransaction(decryptionKey *shcrypto.
 	}
 	return decryptedTx, nil
 }
+
+type RevealRecord struct {
+	DecryptionKey      []byte
+	TransactionRecords []RevealedTransactionRecord
+}
+
+type RevealedTransactionRecord struct {
+	Status            uint64
+	CumulativeGasUsed uint64
+	CumulativeLogs    uint64
+}
+
+const (
+	RevealedTransactionRecordStatusSuccess          = 100
+	RevealedTransactionRecordStatusDecryptionFailed = 101
+	RevealedTransactionRecordStatusExecutionFailed  = 102
+)
 
 // AreShutterContractsDeployed checks if the system contracts required for
 // Shutter to operate are deployed.
@@ -335,13 +353,17 @@ func verifyDecryptionKey(
 	)
 }
 
-func ApplyRevealMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, error) {
+func ApplyRevealMessage(evm *vm.EVM, statedb *state.StateDB, msg *Message, tx *types.Transaction, gp *GasPool) (*ExecutionResult, error) {
 	var (
 		err    error
 		result *ExecutionResult
 	)
 
 	decryptionKeyBytes := msg.Data
+	revealRecord := RevealRecord{
+		DecryptionKey:      decryptionKeyBytes,
+		TransactionRecords: []RevealedTransactionRecord{},
+	}
 	if len(decryptionKeyBytes) == 0 {
 		result, err = ApplyPauseMessage(evm, gp)
 		if err != nil {
@@ -380,21 +402,47 @@ func ApplyRevealMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResul
 		if err != nil {
 			return nil, err
 		}
+		cumulativeGasUsed := uint64(0)
 		for _, encryptedTx := range encryptedTxs {
 			result, err := ApplyEncryptedTransaction(evm, gp, &encryptedTx, decryptionKey)
-			if err != nil {
-				fmt.Printf("encrypted tx could not be executed: %v", err)
-			} else {
-				fmt.Printf("encrypted tx successfully executed: %v", result)
+			if result != nil {
+				cumulativeGasUsed += result.UsedGas
 			}
+			logs := statedb.GetLogs(tx.Hash(), 0, common.Hash{})
+			cumulativeLogs := uint64(len(logs))
+			record := RevealedTransactionRecord{
+				CumulativeGasUsed: cumulativeGasUsed,
+				CumulativeLogs:    cumulativeLogs,
+			}
+			if err != nil {
+				if err == ErrUndecryptableTransaction {
+					record.Status = RevealedTransactionRecordStatusDecryptionFailed
+				} else {
+					record.Status = RevealedTransactionRecordStatusExecutionFailed
+				}
+			} else {
+				record.Status = RevealedTransactionRecordStatusSuccess
+			}
+			revealRecord.TransactionRecords = append(revealRecord.TransactionRecords, record)
 		}
 
 		result = &ExecutionResult{
-			UsedGas:    0,
+			UsedGas:    cumulativeGasUsed,
 			Err:        nil,
 			ReturnData: []byte{},
 		}
 	}
+
+	revealLogData, err := rlp.EncodeToBytes(revealRecord)
+	if err != nil {
+		return nil, err
+	}
+	revealLog := &types.Log{
+		Address: ShutterSystemAddress,
+		Topics:  []common.Hash{},
+		Data:    revealLogData,
+	}
+	statedb.AddLog(revealLog)
 
 	isShutterEnabled, err := IsShutterEnabled(evm)
 	if err != nil {
