@@ -392,6 +392,14 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 		if api.localBlocks.has(id) {
 			return valid(&id), nil
 		}
+		// TODO: we should check the shutter state after the previous block
+		// If shutter is active, expect a special decryptionkey in the payload attrs
+		// Actively fail if there is none.
+		// If shutter is inactive, require NO decryptionkey in the payload attrs.
+		// Actively fail if there is one.
+		// (Because this is how the consensus client will retry and get notified
+		// of a shutter state change)
+
 		payload, err := api.eth.Miner().BuildPayload(args)
 		if err != nil {
 			log.Error("Failed to build payload", "err", err)

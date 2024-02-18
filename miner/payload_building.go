@@ -45,6 +45,9 @@ type BuildPayloadArgs struct {
 	NoTxPool     bool                 // Optimism addition: option to disable tx pool contents from being included
 	Transactions []*types.Transaction // Optimism addition: txs forced into the block via engine API
 	GasLimit     *uint64              // Optimism addition: override gas limit of the block to build
+
+	ShutterDecryptionKey *[]byte // Shutter addition: decryption key
+	ShutterActive        bool    // Shutter addition: desired state by the caller
 }
 
 // Id computes an 8-byte identifier by hashing the components of the payload arguments.
@@ -198,16 +201,18 @@ func (w *worker) buildPayload(args *BuildPayloadArgs) (*Payload, error) {
 	// to deliver for not missing slot.
 	// In OP-Stack, the "empty" block is constructed from provided txs only, i.e. no tx-pool usage.
 	emptyParams := &generateParams{
-		timestamp:   args.Timestamp,
-		forceTime:   true,
-		parentHash:  args.Parent,
-		coinbase:    args.FeeRecipient,
-		random:      args.Random,
-		withdrawals: args.Withdrawals,
-		beaconRoot:  args.BeaconRoot,
-		noTxs:       true,
-		txs:         args.Transactions,
-		gasLimit:    args.GasLimit,
+		timestamp:     args.Timestamp,
+		forceTime:     true,
+		parentHash:    args.Parent,
+		coinbase:      args.FeeRecipient,
+		random:        args.Random,
+		withdrawals:   args.Withdrawals,
+		beaconRoot:    args.BeaconRoot,
+		noTxs:         true,
+		txs:           args.Transactions,
+		gasLimit:      args.GasLimit,
+		decryptionKey: args.ShutterDecryptionKey,
+		shutterActive: args.ShutterActive,
 	}
 	empty := w.getSealingBlock(emptyParams)
 	if empty.err != nil {

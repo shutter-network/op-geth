@@ -939,6 +939,9 @@ type generateParams struct {
 
 	txs      types.Transactions // Deposit transactions to include at the start of the block
 	gasLimit *uint64            // Optional gas limit override
+
+	decryptionKey *[]byte // Optional shutter decryption key
+	shutterActive bool    // Desired shutter state by caller
 }
 
 // prepareWork constructs the sealing task according to the given parameters,
@@ -1022,6 +1025,21 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		log.Error("Failed to create sealing context", "err", err)
 		return nil, err
 	}
+
+	context := core.NewEVMBlockContext(header, w.chain, nil, w.chainConfig, env.state)
+	vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, w.chainConfig, vm.Config{})
+	enabled, err := core.IsShutterEnabled(vmenv)
+	if err != nil {
+		// those are errors in querying the EVM
+		log.Error("Failed to query Shutter state", "err", err)
+		return nil, err
+	}
+	if enabled != genParams.shutterActive {
+		err := errors.New("shutter state invalid")
+		log.Error("Mismatched Shutter state", "err", err)
+		return nil, err
+	}
+
 	if header.ParentBeaconRoot != nil {
 		context := core.NewEVMBlockContext(header, w.chain, nil, w.chainConfig, env.state)
 		vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, w.chainConfig, vm.Config{})
