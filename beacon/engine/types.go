@@ -47,9 +47,8 @@ type PayloadAttributes struct {
 	// GasLimit is a field for rollups: if set, this sets the exact gas limit the block produced with.
 	GasLimit *uint64 `json:"gasLimit,omitempty" gencodec:"optional"`
 
-	// Shutter fields
-	DecryptionKey []byte `json:"decryptionKey,omitempty" gencodec:"optional"`
-	ShutterActive bool   `json:"shutterActive,omitempty" gencodec:"optional"`
+	// Shutter field
+	DecryptionKey *[]byte `json:"decryptionKey,omitempty" gencodec:"optional"`
 }
 
 // JSON type overrides for PayloadAttributes.
@@ -59,7 +58,7 @@ type payloadAttributesMarshaling struct {
 	Transactions []hexutil.Bytes
 	GasLimit     *hexutil.Uint64
 
-	DecryptionKey hexutil.Bytes
+	DecryptionKey *hexutil.Bytes
 }
 
 //go:generate go run github.com/fjl/gencodec -type ExecutableData -field-override executableDataMarshaling -out gen_ed.go

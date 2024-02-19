@@ -385,8 +385,7 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 			NoTxPool:             payloadAttributes.NoTxPool,
 			Transactions:         transactions,
 			GasLimit:             payloadAttributes.GasLimit,
-			ShutterActive:        payloadAttributes.ShutterActive,
-			ShutterDecryptionKey: &payloadAttributes.DecryptionKey,
+			ShutterDecryptionKey: payloadAttributes.DecryptionKey,
 		}
 		id := args.Id()
 		// If we already are busy generating this work, then we do not need

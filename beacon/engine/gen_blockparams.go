@@ -24,8 +24,7 @@ func (p PayloadAttributes) MarshalJSON() ([]byte, error) {
 		Transactions          []hexutil.Bytes     `json:"transactions,omitempty"  gencodec:"optional"`
 		NoTxPool              bool                `json:"noTxPool,omitempty" gencodec:"optional"`
 		GasLimit              *hexutil.Uint64     `json:"gasLimit,omitempty" gencodec:"optional"`
-		DecryptionKey         hexutil.Bytes       `json:"decryptionKey,omitempty" gencodec:"optional"`
-		ShutterActive         bool                `json:"shutterActive,omitempty" gencodec:"optional"`
+		DecryptionKey         *hexutil.Bytes      `json:"decryptionKey,omitempty" gencodec:"optional"`
 	}
 	var enc PayloadAttributes
 	enc.Timestamp = hexutil.Uint64(p.Timestamp)
@@ -41,8 +40,7 @@ func (p PayloadAttributes) MarshalJSON() ([]byte, error) {
 	}
 	enc.NoTxPool = p.NoTxPool
 	enc.GasLimit = (*hexutil.Uint64)(p.GasLimit)
-	enc.DecryptionKey = p.DecryptionKey
-	enc.ShutterActive = p.ShutterActive
+	enc.DecryptionKey = (*hexutil.Bytes)(p.DecryptionKey)
 	return json.Marshal(&enc)
 }
 
@@ -58,7 +56,6 @@ func (p *PayloadAttributes) UnmarshalJSON(input []byte) error {
 		NoTxPool              *bool               `json:"noTxPool,omitempty" gencodec:"optional"`
 		GasLimit              *hexutil.Uint64     `json:"gasLimit,omitempty" gencodec:"optional"`
 		DecryptionKey         *hexutil.Bytes      `json:"decryptionKey,omitempty" gencodec:"optional"`
-		ShutterActive         *bool               `json:"shutterActive,omitempty" gencodec:"optional"`
 	}
 	var dec PayloadAttributes
 	if err := json.Unmarshal(input, &dec); err != nil {
@@ -95,10 +92,7 @@ func (p *PayloadAttributes) UnmarshalJSON(input []byte) error {
 		p.GasLimit = (*uint64)(dec.GasLimit)
 	}
 	if dec.DecryptionKey != nil {
-		p.DecryptionKey = *dec.DecryptionKey
-	}
-	if dec.ShutterActive != nil {
-		p.ShutterActive = *dec.ShutterActive
+		p.DecryptionKey = (*[]byte)(dec.DecryptionKey)
 	}
 	return nil
 }

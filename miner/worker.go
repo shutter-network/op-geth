@@ -17,9 +17,11 @@
 package miner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -80,6 +82,18 @@ var (
 	errBlockInterruptedByNewHead  = errors.New("new head arrived while building block")
 	errBlockInterruptedByRecommit = errors.New("recommit interrupt while building block")
 	errBlockInterruptedByTimeout  = errors.New("timeout while building block")
+)
+
+func init() {
+	DeactivationDecryptionKey = make([]byte, 128)
+	for i := 0; i < len(DeactivationDecryptionKey); i++ {
+		DeactivationDecryptionKey[i] = math.MaxUint8
+	}
+}
+
+var (
+	ErrShutterStateInvalid    = errors.New("shutter state invalid")
+	DeactivationDecryptionKey []byte
 )
 
 // environment is the worker's current environment and holds all
@@ -940,11 +954,9 @@ type generateParams struct {
 	txs      types.Transactions // Deposit transactions to include at the start of the block
 	gasLimit *uint64            // Optional gas limit override
 
-	shutterActive bool    // Assumed shutter state by caller
-	decryptionKey *[]byte // Optional shutter decryption key
+	shutterActive bool
+	decryptionKey *[]byte // Optional shutter 128 byte decryption key. Max value as special value for shutter deactivation.
 }
-
-var ErrShutterStateInvalid = errors.New("shutter state invalid")
 
 // prepareWork constructs the sealing task according to the given parameters,
 // either based on the last chain head or specified parent. In this function
@@ -1028,21 +1040,6 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		return nil, err
 	}
 
-	context := core.NewEVMBlockContext(header, w.chain, nil, w.chainConfig, env.state)
-	vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, w.chainConfig, vm.Config{})
-	enabled, err := core.IsShutterEnabled(vmenv)
-	if err != nil {
-		// those are errors in querying the EVM
-		log.Error("Failed to query Shutter state", "err", err)
-		return nil, err
-	}
-	log.Info("Shutter state", "err", err)
-	if enabled != genParams.shutterActive {
-		log.Error("Mismatched Shutter state", "err", err)
-		return nil, ErrShutterStateInvalid
-	}
-	// TODO: OPTIMIZATION - also verify the correctness of the key to fail early
-
 	if header.ParentBeaconRoot != nil {
 		context := core.NewEVMBlockContext(header, w.chain, nil, w.chainConfig, env.state)
 		vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, w.chainConfig, vm.Config{})
@@ -1082,6 +1079,61 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	return nil
 }
 
+func (w *worker) generateWorkShutter(work *environment, decryptionKey *[]byte) error {
+	context := core.NewEVMBlockContext(work.header, w.chain, nil, w.chainConfig, work.state)
+	vmenv := vm.NewEVM(context, vm.TxContext{}, work.state, w.chainConfig, vm.Config{})
+	enabled, err := core.IsShutterEnabled(vmenv)
+	if err != nil {
+		// those are errors in querying the EVM
+		log.Error("Failed to query Shutter state", "err", err)
+		return err
+	}
+	log.Info("Shutter state", "enabled", enabled)
+
+	// FIXME: will the decryption key actually get translated from decoding to nil, or is this the null value?
+	if !enabled {
+		if decryptionKey != nil {
+			// disabled, but the consensus client sent a key.
+			// we could ignore it, but this means something
+			// might be wrong with the client.
+			return ErrShutterStateInvalid
+		}
+		return nil
+	}
+	// shutter is enabled
+
+	if decryptionKey == nil {
+		// the consensus client assumed an incorrect state
+		log.Error("Mismatched Shutter state", "enabled", enabled)
+		return ErrShutterStateInvalid
+	}
+
+	revealTx := &types.RevealTx{
+		Key: []byte{},
+	}
+	if bytes.Compare(*decryptionKey, DeactivationDecryptionKey) != 0 {
+		// the node does NOT want to disable shutter
+		// FIXME: that's how its encoded - is the decoding correct?
+		// hexKey := hexutil.Bytes(key.SecretKey.Marshal())
+		// attrs.DecryptionKey = &hexKey
+		revealTx.Key = *decryptionKey
+		// TODO: OPTIMIZATION - also verify the correctness of the key in order to fail early
+	} else {
+		// this is a noop, because the RevealTx.Key null value will
+		// disable shutter in the STF at this point
+		log.Info("Shutter disable requested from EngineAPI payload")
+	}
+
+	tx := types.NewTx(revealTx)
+	work.state.SetTxContext(tx.Hash(), work.tcount)
+	_, err = w.commitTransaction(work, tx)
+	if err != nil {
+		return fmt.Errorf("failed to include reveal tx: %s type: %d, err: %w", tx.Hash(), tx.Type(), err)
+	}
+	work.tcount++
+	return nil
+}
+
 // generateWork generates a sealing block based on the given parameters.
 func (w *worker) generateWork(genParams *generateParams) *newPayloadResult {
 	work, err := w.prepareWork(genParams)
@@ -1094,6 +1146,14 @@ func (w *worker) generateWork(genParams *generateParams) *newPayloadResult {
 	}
 
 	misc.EnsureCreate2Deployer(w.chainConfig, work.header.Time, work.state)
+
+	// XXX: check wether a nil or null value is decoded
+	// to the genParams decryptionKey field.
+	// We need NIL to properly function in this method:
+	err = w.generateWorkShutter(work, genParams.decryptionKey)
+	if err != nil {
+		return &newPayloadResult{err: err}
+	}
 
 	for _, tx := range genParams.txs {
 		from, _ := types.Sender(work.signer, tx)

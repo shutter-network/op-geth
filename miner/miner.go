@@ -250,6 +250,5 @@ func (miner *Miner) SubscribePendingLogs(ch chan<- []*types.Log) event.Subscript
 
 // BuildPayload builds the payload according to the provided parameters.
 func (miner *Miner) BuildPayload(args *BuildPayloadArgs) (*Payload, error) {
-	log.Info("Build payload args", "args", args, "shutter-active", args.ShutterActive, "shutter-key", args.ShutterDecryptionKey)
 	return miner.worker.buildPayload(args)
 }

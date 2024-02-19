@@ -46,8 +46,7 @@ type BuildPayloadArgs struct {
 	Transactions []*types.Transaction // Optimism addition: txs forced into the block via engine API
 	GasLimit     *uint64              // Optimism addition: override gas limit of the block to build
 
-	ShutterDecryptionKey *[]byte // Shutter addition: decryption key
-	ShutterActive        bool    // Shutter addition: desired state by the caller
+	ShutterDecryptionKey *[]byte // Shutter addition: 128 byte decryption key (optional). Max value array has special meaning.
 }
 
 // Id computes an 8-byte identifier by hashing the components of the payload arguments.
@@ -212,7 +211,6 @@ func (w *worker) buildPayload(args *BuildPayloadArgs) (*Payload, error) {
 		txs:           args.Transactions,
 		gasLimit:      args.GasLimit,
 		decryptionKey: args.ShutterDecryptionKey,
-		shutterActive: args.ShutterActive,
 	}
 	empty := w.getSealingBlock(emptyParams)
 	if empty.err != nil {
@@ -252,7 +250,6 @@ func (w *worker) buildPayload(args *BuildPayloadArgs) (*Payload, error) {
 			noTxs:         false,
 			txs:           args.Transactions,
 			gasLimit:      args.GasLimit,
-			shutterActive: args.ShutterActive,
 			decryptionKey: args.ShutterDecryptionKey,
 		}
 
