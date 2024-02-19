@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/shutter"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 var ShutterSystemAddress = common.HexToAddress("0x8000000000000000000000000000000000000001")
@@ -161,13 +162,16 @@ func IsShutterEnabled(evm *vm.EVM) (bool, error) {
 		return false, nil
 	}
 
+	log.Info("EVM: shutter configured")
 	deployed := AreShutterContractsDeployed(evm)
 	if !deployed {
 		return false, nil
 	}
+	log.Info("EVM: contracts deployed")
 
 	eonKey, err := GetCurrentEonKey(evm)
 	if err == ErrNoActiveKeyperSet {
+		log.Info("EVM: no active keyperset")
 		return false, nil
 	}
 	if err != nil {
@@ -177,13 +181,16 @@ func IsShutterEnabled(evm *vm.EVM) (bool, error) {
 		return false, nil
 	}
 
+	log.Info("EVM: active keyperset")
 	paused, err := IsShutterKeyperSetManagerPaused(evm)
 	if err != nil {
 		return false, err
 	}
 	if paused {
+		log.Info("EVM: paused")
 		return false, nil
 	}
+	log.Info("EVM: not paused")
 
 	return true, nil
 }

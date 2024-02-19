@@ -1034,6 +1034,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		log.Error("Failed to query Shutter state", "err", err)
 		return nil, err
 	}
+	log.Info("Shutter state", "err", err)
 	if enabled != genParams.shutterActive {
 		err := errors.New("shutter state invalid")
 		log.Error("Mismatched Shutter state", "err", err)

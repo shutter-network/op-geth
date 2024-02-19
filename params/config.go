@@ -453,6 +453,9 @@ func (c *ChainConfig) Description() string {
 	default:
 		banner += "Consensus: unknown\n"
 	}
+	if c.Shutter != nil {
+		banner += "MEV-Protection: Shutter\n"
+	}
 	banner += "\n"
 
 	// Create a list of forks with a short description of them. Forks that only
@@ -647,6 +650,7 @@ func (c *ChainConfig) IsOptimismBedrock(num *big.Int) bool {
 func (c *ChainConfig) IsOptimismRegolith(time uint64) bool {
 	return c.IsOptimism() && c.IsRegolith(time)
 }
+
 func (c *ChainConfig) IsOptimismCanyon(time uint64) bool {
 	return c.IsOptimism() && c.IsCanyon(time)
 }
