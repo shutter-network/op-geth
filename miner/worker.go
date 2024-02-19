@@ -940,9 +940,11 @@ type generateParams struct {
 	txs      types.Transactions // Deposit transactions to include at the start of the block
 	gasLimit *uint64            // Optional gas limit override
 
+	shutterActive bool    // Assumed shutter state by caller
 	decryptionKey *[]byte // Optional shutter decryption key
-	shutterActive bool    // Desired shutter state by caller
 }
+
+var ErrShutterStateInvalid = errors.New("shutter state invalid")
 
 // prepareWork constructs the sealing task according to the given parameters,
 // either based on the last chain head or specified parent. In this function
@@ -1036,10 +1038,10 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	}
 	log.Info("Shutter state", "err", err)
 	if enabled != genParams.shutterActive {
-		err := errors.New("shutter state invalid")
 		log.Error("Mismatched Shutter state", "err", err)
-		return nil, err
+		return nil, ErrShutterStateInvalid
 	}
+	// TODO: OPTIMIZATION - also verify the correctness of the key to fail early
 
 	if header.ParentBeaconRoot != nil {
 		context := core.NewEVMBlockContext(header, w.chain, nil, w.chainConfig, env.state)

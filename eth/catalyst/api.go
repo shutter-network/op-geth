@@ -403,7 +403,10 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 		// of a shutter state change)
 
 		payload, err := api.eth.Miner().BuildPayload(args)
-		if err != nil {
+		if errors.Is(err, miner.ErrShutterStateInvalid) {
+			log.Error("Failed to build payload due to invalid shutter state assumptions", "err", err)
+			return valid(nil), engine.InvalidShutterState.With(err)
+		} else if err != nil {
 			log.Error("Failed to build payload", "err", err)
 			return valid(nil), engine.InvalidPayloadAttributes.With(err)
 		}
