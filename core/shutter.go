@@ -1,7 +1,6 @@
 package core
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
@@ -298,12 +297,6 @@ func GetSubmittedEncryptedTransactions(evm *vm.EVM, blockNumber uint64) ([]Encry
 	return txs, nil
 }
 
-func ComputeIdentityPreimage(blockNumber uint64) []byte {
-	b := make([]byte, 8)
-	binary.BigEndian.PutUint64(b, blockNumber)
-	return b
-}
-
 func ClearSubmittedEncryptedTransactions(evm *vm.EVM) error {
 	data, err := shutter.InboxABI.Pack("clear")
 	if err != nil {
@@ -326,6 +319,11 @@ func ClearSubmittedEncryptedTransactions(evm *vm.EVM) error {
 	return nil
 }
 
+func Uint64ToIdentityPreimage(n uint64) []byte {
+	b := new(big.Int).SetUint64(n)
+	return b.Bytes()
+}
+
 // verifyDecryptionKey checks that the given key is correct for the given block number and eon
 // key. It does so by encrypting a test message pseudo-randomly derived from the previous block
 // hash.
@@ -335,7 +333,7 @@ func verifyDecryptionKey(
 	blockNumber uint64,
 	prevBlockHash common.Hash,
 ) (bool, error) {
-	identity := ComputeIdentityPreimage(blockNumber)
+	identity := Uint64ToIdentityPreimage(blockNumber)
 
 	sigmaPreimage := append(prevBlockHash[:], []byte("sigma")...)
 	sigmaBytes := crypto.Keccak256(sigmaPreimage)
@@ -394,6 +392,7 @@ func ApplyRevealMessage(evm *vm.EVM, statedb *state.StateDB, msg *Message, tx *t
 		if err != nil {
 			return nil, err
 		}
+		// FIXME: we fail here
 		if !ok {
 			return nil, ErrInvalidDecryptionKey
 		}
