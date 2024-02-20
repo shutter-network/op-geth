@@ -569,8 +569,17 @@ func (rs Receipts) DeriveFields(config *params.ChainConfig, hash common.Hash, nu
 			logIndex++
 		}
 	}
+	l1InfoIndex := 0
+	hasShutter := false
+	if config.Optimism != nil && config.Shutter != nil && len(txs) >= 1 {
+		if txs[0].Type() == RevealTxType {
+			l1InfoIndex = 1
+			hasShutter = true
+		}
+	}
+	_ = hasShutter
 	if config.Optimism != nil && len(txs) >= 2 { // need at least an info tx and a non-info tx
-		if data := txs[0].Data(); len(data) >= 4+32*8 { // function selector + 8 arguments to setL1BlockValues
+		if data := txs[l1InfoIndex].Data(); len(data) >= 4+32*8 { // function selector + 8 arguments to setL1BlockValues
 			l1Basefee := new(big.Int).SetBytes(data[4+32*2 : 4+32*3]) // arg index 2
 			overhead := new(big.Int).SetBytes(data[4+32*6 : 4+32*7])  // arg index 6
 			scalar := new(big.Int).SetBytes(data[4+32*7 : 4+32*8])    // arg index 7
