@@ -263,11 +263,13 @@ func GetSubmittedEncryptedTransactions(evm *vm.EVM, blockNumber uint64) ([]Encry
 		new(big.Int),
 	)
 	if err != nil {
+		err = fmt.Errorf("evm call Inbox.getTransactions(blockNumber=%d): %s", blockNumber, err.Error())
 		return []EncryptedTransaction{}, err
 	}
 
 	unpacked, err := shutter.InboxABI.Unpack("getTransactions", ret)
 	if err != nil {
+		err = fmt.Errorf("unpack getTransactions return value: %s", err.Error())
 		return []EncryptedTransaction{}, err
 	}
 	if len(unpacked) != 1 {
@@ -365,6 +367,7 @@ func ApplyRevealMessage(evm *vm.EVM, statedb *state.StateDB, msg *Message, tx *t
 	if len(decryptionKeyBytes) == 0 {
 		result, err = ApplyPauseMessage(evm, gp)
 		if err != nil {
+			err = fmt.Errorf("apply pause message: %s", err.Error())
 			return nil, err
 		}
 	} else {
@@ -392,13 +395,13 @@ func ApplyRevealMessage(evm *vm.EVM, statedb *state.StateDB, msg *Message, tx *t
 		if err != nil {
 			return nil, err
 		}
-		// FIXME: we fail here
 		if !ok {
 			return nil, ErrInvalidDecryptionKey
 		}
 
 		encryptedTxs, err := GetSubmittedEncryptedTransactions(evm, blockNumber)
 		if err != nil {
+			err = fmt.Errorf("get submitted encrypted tx's: %s", err.Error())
 			return nil, err
 		}
 		cumulativeGasUsed := uint64(0)
@@ -434,6 +437,7 @@ func ApplyRevealMessage(evm *vm.EVM, statedb *state.StateDB, msg *Message, tx *t
 
 	revealLogData, err := rlp.EncodeToBytes(revealRecord)
 	if err != nil {
+		err = fmt.Errorf("rlp encode reveal record: %s", err.Error())
 		return nil, err
 	}
 	revealLog := &types.Log{
@@ -445,10 +449,12 @@ func ApplyRevealMessage(evm *vm.EVM, statedb *state.StateDB, msg *Message, tx *t
 
 	isShutterEnabled, err := IsShutterEnabled(evm)
 	if err != nil {
+		err = fmt.Errorf("is shutter enabled check: %s", err.Error())
 		return nil, err
 	}
 	if isShutterEnabled {
 		if err := ClearSubmittedEncryptedTransactions(evm); err != nil {
+			err = fmt.Errorf("clear submitted encrypted txs: %s", err.Error())
 			return nil, err
 		}
 	}

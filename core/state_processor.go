@@ -155,6 +155,9 @@ func applyTransaction(msg *Message, config *params.ChainConfig, gp *GasPool, sta
 	)
 	if tx.Type() == types.RevealTxType {
 		result, err = ApplyRevealMessage(evm, statedb, msg, tx, gp)
+		if err != nil {
+			err = fmt.Errorf("apply reveal message: %s", err.Error())
+		}
 	} else {
 		result, err = ApplyMessage(evm, msg, gp)
 	}
