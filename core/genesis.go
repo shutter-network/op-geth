@@ -25,6 +25,8 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/ethereum-optimism/superchain-registry/superchain"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -129,8 +131,8 @@ func (ga *GenesisAlloc) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// deriveHash computes the state root according to the genesis specification.
-func (ga *GenesisAlloc) deriveHash() (common.Hash, error) {
+// hash computes the state root according to the genesis specification.
+func (ga *GenesisAlloc) hash() (common.Hash, error) {
 	// Create an ephemeral in-memory database for computing hash,
 	// all the derived states will be discarded to not pollute disk.
 	db := state.NewDatabase(rawdb.NewMemoryDatabase())
@@ -151,9 +153,9 @@ func (ga *GenesisAlloc) deriveHash() (common.Hash, error) {
 	return statedb.Commit(0, false)
 }
 
-// flush is very similar with deriveHash, but the main difference is
-// all the generated states will be persisted into the given database.
-// Also, the genesis state specification will be flushed as well.
+// flush is very similar with hash, but the main difference is all the generated
+// states will be persisted into the given database. Also, the genesis state
+// specification will be flushed as well.
 func (ga *GenesisAlloc) flush(db ethdb.Database, triedb *trie.Database, blockhash common.Hash) error {
 	statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseWithNodeDB(db, triedb), nil)
 	if err != nil {
@@ -186,39 +188,6 @@ func (ga *GenesisAlloc) flush(db ethdb.Database, triedb *trie.Database, blockhas
 	}
 	rawdb.WriteGenesisStateSpec(db, blockhash, blob)
 	return nil
-}
-
-// CommitGenesisState loads the stored genesis state with the given block
-// hash and commits it into the provided trie database.
-func CommitGenesisState(db ethdb.Database, triedb *trie.Database, blockhash common.Hash) error {
-	var alloc GenesisAlloc
-	blob := rawdb.ReadGenesisStateSpec(db, blockhash)
-	if len(blob) != 0 {
-		if err := alloc.UnmarshalJSON(blob); err != nil {
-			return err
-		}
-	} else {
-		// Genesis allocation is missing and there are several possibilities:
-		// the node is legacy which doesn't persist the genesis allocation or
-		// the persisted allocation is just lost.
-		// - supported networks(mainnet, testnets), recover with defined allocations
-		// - private network, can't recover
-		var genesis *Genesis
-		switch blockhash {
-		case params.MainnetGenesisHash:
-			genesis = DefaultGenesisBlock()
-		case params.GoerliGenesisHash:
-			genesis = DefaultGoerliGenesisBlock()
-		case params.SepoliaGenesisHash:
-			genesis = DefaultSepoliaGenesisBlock()
-		}
-		if genesis != nil {
-			alloc = genesis.Alloc
-		} else {
-			return errors.New("not found")
-		}
-	}
-	return alloc.flush(db, triedb, blockhash)
 }
 
 // GenesisAccount is an account in the state of the genesis block.
@@ -288,7 +257,8 @@ type ChainOverrides struct {
 	OverrideCancun *uint64
 	OverrideVerkle *uint64
 	// optimism
-	OverrideOptimismCanyon *uint64
+	OverrideOptimismCanyon  *uint64
+	ApplySuperchainUpgrades bool
 }
 
 // SetupGenesisBlock writes or updates the genesis block in db.
@@ -314,6 +284,19 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *trie.Database, gen
 	}
 	applyOverrides := func(config *params.ChainConfig) {
 		if config != nil {
+			// If applying the superchain-registry to a known OP-Stack chain,
+			// then override the local chain-config with that from the registry.
+			if overrides != nil && overrides.ApplySuperchainUpgrades && config.IsOptimism() && config.ChainID != nil && config.ChainID.IsUint64() {
+				if _, ok := superchain.OPChains[config.ChainID.Uint64()]; ok {
+					conf, err := params.LoadOPStackChainConfig(config.ChainID.Uint64())
+					if err != nil {
+						log.Warn("failed to load chain config from superchain-registry, skipping override", "err", err, "chain_id", config.ChainID)
+					} else {
+						*config = *conf
+					}
+				}
+			}
+
 			if config.IsOptimism() && config.ChainID != nil && config.ChainID.Cmp(big.NewInt(params.OPGoerliChainID)) == 0 {
 				// Apply Optimism Goerli regolith time
 				config.RegolithTime = &params.OptimismGoerliRegolithTime
@@ -330,6 +313,10 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *trie.Database, gen
 			}
 			if overrides != nil && overrides.OverrideOptimismCanyon != nil {
 				config.CanyonTime = overrides.OverrideOptimismCanyon
+				config.ShanghaiTime = overrides.OverrideOptimismCanyon
+				if config.Optimism != nil && config.Optimism.EIP1559DenominatorCanyon == 0 {
+					config.Optimism.EIP1559DenominatorCanyon = 250
+				}
 			}
 		}
 	}
@@ -474,7 +461,7 @@ func (g *Genesis) ToBlock() *types.Block {
 				"and non-empty state-allocation", *g.StateHash))
 		}
 		root = *g.StateHash
-	} else if root, err = g.Alloc.deriveHash(); err != nil {
+	} else if root, err = g.Alloc.hash(); err != nil {
 		panic(err)
 	}
 	head := &types.Header{
@@ -616,10 +603,9 @@ func DefaultHoleskyGenesisBlock() *Genesis {
 	return &Genesis{
 		Config:     params.HoleskyChainConfig,
 		Nonce:      0x1234,
-		ExtraData:  hexutil.MustDecode("0x686f77206d7563682069732074686520666973683f"),
 		GasLimit:   0x17d7840,
 		Difficulty: big.NewInt(0x01),
-		Timestamp:  1694786100,
+		Timestamp:  1695902100,
 		Alloc:      decodePrealloc(holeskyAllocData),
 	}
 }

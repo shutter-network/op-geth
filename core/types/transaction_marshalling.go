@@ -477,9 +477,18 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		}
 
 	case RevealTxType:
-		if dec.Nonce != nil || dec.To != nil || dec.GasPrice != nil || dec.Gas != nil || dec.GasPrice != nil || dec.MaxPriorityFeePerGas != nil || dec.MaxFeePerGas != nil || dec.MaxFeePerBlobGas != nil || dec.Value != nil || dec.AccessList != nil || dec.BlobVersionedHashes != nil || dec.V != nil || dec.R != nil || dec.S != nil || dec.YParity != nil {
-			return errors.New("unexpected field(s) in reveal transaction")
-		}
+		// TODO: this was too restrictive,
+		// since most (non-optional) values here do not decode to "nil", but rather
+		// the null value of the type. This is so (for some types), even if the type
+		// on the struct is a pointer!
+		// If the checks should be done, change the relevant "nil" values to their
+		// null values!
+		// That's how a decoded reveal-tx looks like:
+		// {0x50 <nil> 0x0 0x0000000000000000000000000000000000000000 0x0 0x0 <nil> <nil> <nil> 0x0 0x1039e519cffbca21616d1023c81590a992d26847d47694ba0454306d42ab43f10b1124179f9a237840c244955cb4501d68adb87c463edb0de12fe3495f08ea45 <nil> [] 0x0 0x0 0x0 <nil> <nil> 0x0000000000000000000000000000000000000000 <nil> <nil> 0x4ad47f8944c64b95ca55aa425d2e9588ecf5b7f0f1002ef8f36d1bbe04c14b18}
+
+		// if dec.Nonce != nil || dec.To != nil || dec.GasPrice != nil || dec.Gas != nil || dec.GasPrice != nil || dec.MaxPriorityFeePerGas != nil || dec.MaxFeePerGas != nil || dec.MaxFeePerBlobGas != nil || dec.Value != nil || dec.AccessList != nil || dec.BlobVersionedHashes != nil || dec.V != nil || dec.R != nil || dec.S != nil || dec.YParity != nil {
+		// 	return errors.New("unexpected field(s) in reveal transaction")
+		// }
 		var itx RevealTx
 		inner = &itx
 		if dec.Input == nil {

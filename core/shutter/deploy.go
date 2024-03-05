@@ -14,17 +14,22 @@ func GetKeyBroadcastContractDeployData(keyperSetManagerAddress *common.Address) 
 	return append(bytecode, args...)
 }
 
-func GetKeyperSetManagerDeployData() []byte {
-	return getBytecode(keyperSetManagerJSON)
+func GetKeyperSetManagerDeployData(dao *common.Address, sequencer *common.Address) []byte {
+	bytecode := getBytecode(keyperSetManagerJSON)
+	args, err := KeyperSetManagerABI.Pack("", dao, sequencer)
+	if err != nil {
+		panic(err)
+	}
+	return append(bytecode, args...)
 }
 
 func GetKeyperSetDeployData() []byte {
 	return getBytecode(keyperSetJSON)
 }
 
-func GetInboxDeployData(blockGasLimit uint64) []byte {
+func GetInboxDeployData(blockGasLimit uint64, dao *common.Address, sequencer *common.Address) []byte {
 	bytecode := getBytecode(inboxJSON)
-	args, err := InboxABI.Pack("", blockGasLimit)
+	args, err := InboxABI.Pack("", blockGasLimit, dao, sequencer)
 	if err != nil {
 		panic(err)
 	}

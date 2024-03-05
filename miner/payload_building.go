@@ -33,7 +33,7 @@ import (
 
 // BuildPayloadArgs contains the provided parameters for building payload.
 // Check engine-api specification for more details.
-// https://github.com/ethereum/execution-apis/blob/main/src/engine/specification.md#payloadattributesv1
+// https://github.com/ethereum/execution-apis/blob/main/src/engine/cancun.md#payloadattributesv3
 type BuildPayloadArgs struct {
 	Parent       common.Hash       // The parent block to build payload on top
 	Timestamp    uint64            // The provided timestamp of generated payload
@@ -45,6 +45,8 @@ type BuildPayloadArgs struct {
 	NoTxPool     bool                 // Optimism addition: option to disable tx pool contents from being included
 	Transactions []*types.Transaction // Optimism addition: txs forced into the block via engine API
 	GasLimit     *uint64              // Optimism addition: override gas limit of the block to build
+
+	ShutterDecryptionKey *[]byte // Shutter addition: 128 byte decryption key (optional). Max value array has special meaning.
 }
 
 // Id computes an 8-byte identifier by hashing the components of the payload arguments.
@@ -198,16 +200,17 @@ func (w *worker) buildPayload(args *BuildPayloadArgs) (*Payload, error) {
 	// to deliver for not missing slot.
 	// In OP-Stack, the "empty" block is constructed from provided txs only, i.e. no tx-pool usage.
 	emptyParams := &generateParams{
-		timestamp:   args.Timestamp,
-		forceTime:   true,
-		parentHash:  args.Parent,
-		coinbase:    args.FeeRecipient,
-		random:      args.Random,
-		withdrawals: args.Withdrawals,
-		beaconRoot:  args.BeaconRoot,
-		noTxs:       true,
-		txs:         args.Transactions,
-		gasLimit:    args.GasLimit,
+		timestamp:     args.Timestamp,
+		forceTime:     true,
+		parentHash:    args.Parent,
+		coinbase:      args.FeeRecipient,
+		random:        args.Random,
+		withdrawals:   args.Withdrawals,
+		beaconRoot:    args.BeaconRoot,
+		noTxs:         true,
+		txs:           args.Transactions,
+		gasLimit:      args.GasLimit,
+		decryptionKey: args.ShutterDecryptionKey,
 	}
 	empty := w.getSealingBlock(emptyParams)
 	if empty.err != nil {
@@ -237,16 +240,17 @@ func (w *worker) buildPayload(args *BuildPayloadArgs) (*Payload, error) {
 		endTimer := time.NewTimer(time.Second * 12)
 
 		fullParams := &generateParams{
-			timestamp:   args.Timestamp,
-			forceTime:   true,
-			parentHash:  args.Parent,
-			coinbase:    args.FeeRecipient,
-			random:      args.Random,
-			withdrawals: args.Withdrawals,
-			beaconRoot:  args.BeaconRoot,
-			noTxs:       false,
-			txs:         args.Transactions,
-			gasLimit:    args.GasLimit,
+			timestamp:     args.Timestamp,
+			forceTime:     true,
+			parentHash:    args.Parent,
+			coinbase:      args.FeeRecipient,
+			random:        args.Random,
+			withdrawals:   args.Withdrawals,
+			beaconRoot:    args.BeaconRoot,
+			noTxs:         false,
+			txs:           args.Transactions,
+			gasLimit:      args.GasLimit,
+			decryptionKey: args.ShutterDecryptionKey,
 		}
 
 		for {

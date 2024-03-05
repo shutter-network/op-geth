@@ -46,6 +46,9 @@ const (
 
 	// ReceiptStatusSuccessful is the status code of a transaction if execution succeeded.
 	ReceiptStatusSuccessful = uint64(1)
+
+	// The version number for post-canyon deposit receipts.
+	CanyonDepositReceiptVersion = uint64(1)
 )
 
 // Receipt represents the results of a transaction.
@@ -70,6 +73,10 @@ type Receipt struct {
 	// DepositNonce was introduced in Regolith to store the actual nonce used by deposit transactions
 	// The state transition process ensures this is only set for Regolith deposit transactions.
 	DepositNonce *uint64 `json:"depositNonce,omitempty"`
+	// DepositReceiptVersion was introduced in Canyon to indicate an update to how receipt hashes
+	// should be computed when set. The state transition process ensures this is only set for
+	// post-Canyon deposit transactions.
+	DepositReceiptVersion *uint64 `json:"depositReceiptVersion,omitempty"`
 
 	// Inclusion information: These fields provide information about the inclusion of the
 	// transaction corresponding to this receipt.
@@ -96,11 +103,13 @@ type receiptMarshaling struct {
 	BlockNumber       *hexutil.Big
 	TransactionIndex  hexutil.Uint
 
-	// Optimism: extend receipts with their L1 price (if a rollup tx)
-	L1GasPrice *hexutil.Big
-	L1GasUsed  *hexutil.Big
-	L1Fee      *hexutil.Big
-	FeeScalar  *big.Float
+	// Optimism
+	L1GasPrice            *hexutil.Big
+	L1GasUsed             *hexutil.Big
+	L1Fee                 *hexutil.Big
+	FeeScalar             *big.Float
+	DepositNonce          *hexutil.Uint64
+	DepositReceiptVersion *hexutil.Uint64
 }
 
 // receiptRLP is the consensus encoding of a receipt.
@@ -111,7 +120,7 @@ type receiptRLP struct {
 	Logs              []*Log
 }
 
-type depositReceiptRlp struct {
+type depositReceiptRLP struct {
 	PostStateOrStatus []byte
 	CumulativeGasUsed uint64
 	Bloom             Bloom
@@ -119,6 +128,10 @@ type depositReceiptRlp struct {
 	// DepositNonce was introduced in Regolith to store the actual nonce used by deposit transactions.
 	// Must be nil for any transactions prior to Regolith or that aren't deposit transactions.
 	DepositNonce *uint64 `rlp:"optional"`
+	// Receipt hash post-Regolith but pre-Canyon inadvertently did not include the above
+	// DepositNonce. Post Canyon, receipts will have a non-empty DepositReceiptVersion indicating
+	// which post-Canyon receipt hash function to invoke.
+	DepositReceiptVersion *uint64 `rlp:"optional"`
 }
 
 // storedReceiptRLP is the storage encoding of a receipt.
@@ -129,6 +142,10 @@ type storedReceiptRLP struct {
 	// DepositNonce was introduced in Regolith to store the actual nonce used by deposit transactions.
 	// Must be nil for any transactions prior to Regolith or that aren't deposit transactions.
 	DepositNonce *uint64 `rlp:"optional"`
+	// Receipt hash post-Regolith but pre-Canyon inadvertently did not include the above
+	// DepositNonce. Post Canyon, receipts will have a non-empty DepositReceiptVersion indicating
+	// which post-Canyon receipt hash function to invoke.
+	DepositReceiptVersion *uint64 `rlp:"optional"`
 }
 
 // LegacyOptimismStoredReceiptRLP is the pre bedrock storage encoding of a
@@ -234,7 +251,7 @@ func (r *Receipt) encodeTyped(data *receiptRLP, w *bytes.Buffer) error {
 	w.WriteByte(r.Type)
 	switch r.Type {
 	case DepositTxType:
-		withNonce := depositReceiptRlp{data.PostStateOrStatus, data.CumulativeGasUsed, data.Bloom, data.Logs, r.DepositNonce}
+		withNonce := &depositReceiptRLP{data.PostStateOrStatus, data.CumulativeGasUsed, data.Bloom, data.Logs, r.DepositNonce, r.DepositReceiptVersion}
 		return rlp.Encode(w, withNonce)
 	default:
 		return rlp.Encode(w, data)
@@ -315,13 +332,14 @@ func (r *Receipt) decodeTyped(b []byte) error {
 		r.Type = b[0]
 		return r.setFromRLP(data)
 	case DepositTxType:
-		var data depositReceiptRlp
+		var data depositReceiptRLP
 		err := rlp.DecodeBytes(b[1:], &data)
 		if err != nil {
 			return err
 		}
 		r.Type = b[0]
 		r.DepositNonce = data.DepositNonce
+		r.DepositReceiptVersion = data.DepositReceiptVersion
 		return r.setFromRLP(receiptRLP{data.PostStateOrStatus, data.CumulativeGasUsed, data.Bloom, data.Logs})
 	default:
 		return ErrTxTypeNotSupported
@@ -388,6 +406,9 @@ func (r *ReceiptForStorage) EncodeRLP(_w io.Writer) error {
 	w.ListEnd(logList)
 	if r.DepositNonce != nil {
 		w.WriteUint64(*r.DepositNonce)
+		if r.DepositReceiptVersion != nil {
+			w.WriteUint64(*r.DepositReceiptVersion)
+		}
 	}
 	w.ListEnd(outerList)
 	return w.Flush()
@@ -451,6 +472,7 @@ func decodeStoredReceiptRLP(r *ReceiptForStorage, blob []byte) error {
 	r.Bloom = CreateBloom(Receipts{(*Receipt)(r)})
 	if stored.DepositNonce != nil {
 		r.DepositNonce = stored.DepositNonce
+		r.DepositReceiptVersion = stored.DepositReceiptVersion
 	}
 	return nil
 }
@@ -461,7 +483,10 @@ type Receipts []*Receipt
 // Len returns the number of receipts in this list.
 func (rs Receipts) Len() int { return len(rs) }
 
-// EncodeIndex encodes the i'th receipt to w.
+// EncodeIndex encodes the i'th receipt to w. For DepositTxType receipts with non-nil DepositNonce
+// but nil DepositReceiptVersion, the output will differ than calling r.MarshalBinary(); this
+// behavior difference should not be changed to preserve backwards compatibility of receipt-root
+// hash computation.
 func (rs Receipts) EncodeIndex(i int, w *bytes.Buffer) {
 	r := rs[i]
 	data := &receiptRLP{r.statusEncoding(), r.CumulativeGasUsed, r.Bloom, r.Logs}
@@ -471,8 +496,16 @@ func (rs Receipts) EncodeIndex(i int, w *bytes.Buffer) {
 	}
 	w.WriteByte(r.Type)
 	switch r.Type {
-	case AccessListTxType, DynamicFeeTxType, BlobTxType, DepositTxType:
+	case AccessListTxType, DynamicFeeTxType, BlobTxType:
 		rlp.Encode(w, data)
+	case DepositTxType:
+		if r.DepositReceiptVersion != nil {
+			// post-canyon receipt hash computation update
+			depositData := &depositReceiptRLP{data.PostStateOrStatus, data.CumulativeGasUsed, r.Bloom, r.Logs, r.DepositNonce, r.DepositReceiptVersion}
+			rlp.Encode(w, depositData)
+		} else {
+			rlp.Encode(w, data)
+		}
 	default:
 		// For unsupported types, write nothing. Since this is for
 		// DeriveSha, the error will be caught matching the derived hash
@@ -536,8 +569,17 @@ func (rs Receipts) DeriveFields(config *params.ChainConfig, hash common.Hash, nu
 			logIndex++
 		}
 	}
+	l1InfoIndex := 0
+	hasShutter := false
+	if config.Optimism != nil && config.Shutter != nil && len(txs) >= 1 {
+		if txs[0].Type() == RevealTxType {
+			l1InfoIndex = 1
+			hasShutter = true
+		}
+	}
+	_ = hasShutter
 	if config.Optimism != nil && len(txs) >= 2 { // need at least an info tx and a non-info tx
-		if data := txs[0].Data(); len(data) >= 4+32*8 { // function selector + 8 arguments to setL1BlockValues
+		if data := txs[l1InfoIndex].Data(); len(data) >= 4+32*8 { // function selector + 8 arguments to setL1BlockValues
 			l1Basefee := new(big.Int).SetBytes(data[4+32*2 : 4+32*3]) // arg index 2
 			overhead := new(big.Int).SetBytes(data[4+32*6 : 4+32*7])  // arg index 6
 			scalar := new(big.Int).SetBytes(data[4+32*7 : 4+32*8])    // arg index 7

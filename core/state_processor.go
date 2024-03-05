@@ -24,7 +24,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
-	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -77,6 +76,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	if p.config.DAOForkSupport && p.config.DAOForkBlock != nil && p.config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(statedb)
 	}
+	misc.EnsureCreate2Deployer(p.config, block.Time(), statedb)
 	var (
 		context = NewEVMBlockContext(header, p.bc, nil, p.config, statedb)
 		vmenv   = vm.NewEVM(context, vm.TxContext{}, statedb, p.config, cfg)
@@ -154,7 +154,10 @@ func applyTransaction(msg *Message, config *params.ChainConfig, gp *GasPool, sta
 		err    error
 	)
 	if tx.Type() == types.RevealTxType {
-		result, err = ApplyRevealMessage(evm, msg, gp)
+		result, err = ApplyRevealMessage(evm, statedb, msg, tx, gp)
+		if err != nil {
+			err = fmt.Errorf("apply reveal message: %s", err.Error())
+		}
 	} else {
 		result, err = ApplyMessage(evm, msg, gp)
 	}
@@ -183,13 +186,19 @@ func applyTransaction(msg *Message, config *params.ChainConfig, gp *GasPool, sta
 	receipt.GasUsed = result.UsedGas
 
 	if msg.IsDepositTx && config.IsOptimismRegolith(evm.Context.Time) {
-		// The actual nonce for deposit transactions is only recorded from Regolith onwards.
-		// Before the Regolith fork the DepositNonce must remain nil
+		// The actual nonce for deposit transactions is only recorded from Regolith onwards and
+		// otherwise must be nil.
 		receipt.DepositNonce = &nonce
+		// The DepositReceiptVersion for deposit transactions is only recorded from Canyon onwards
+		// and otherwise must be nil.
+		if config.IsOptimismCanyon(evm.Context.Time) {
+			receipt.DepositReceiptVersion = new(uint64)
+			*receipt.DepositReceiptVersion = types.CanyonDepositReceiptVersion
+		}
 	}
 	if tx.Type() == types.BlobTxType {
 		receipt.BlobGasUsed = uint64(len(tx.BlobHashes()) * params.BlobTxBlobGasPerBlob)
-		receipt.BlobGasPrice = eip4844.CalcBlobFee(*evm.Context.ExcessBlobGas)
+		receipt.BlobGasPrice = evm.Context.BlobBaseFee
 	}
 
 	// If the transaction created a contract, store the creation address in the receipt.

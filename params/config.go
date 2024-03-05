@@ -26,15 +26,19 @@ import (
 // Genesis hashes to enforce below configs on.
 var (
 	MainnetGenesisHash = common.HexToHash("0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3")
-	HoleskyGenesisHash = common.HexToHash("0xff9006519a8ce843ac9c28549d24211420b546e12ce2d170c77a8cca7964f23d")
+	HoleskyGenesisHash = common.HexToHash("0xb5f7f912443c940f21fd611f12828d75b534364ed9e95ca4e307729a4661bde4")
 	SepoliaGenesisHash = common.HexToHash("0x25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9")
 	GoerliGenesisHash  = common.HexToHash("0xbf7e331f7f7c1dd2e05159666b3bf8bc7a8a3a9eb1d518969eab529dd9b88c1a")
 )
 
 const (
-	OPMainnetChainID  = 10
-	OPGoerliChainID   = 420
-	BaseGoerliChainID = 84531
+	OPMainnetChainID        = 10
+	OPGoerliChainID         = 420
+	BaseMainnetChainID      = 8453
+	BaseGoerliChainID       = 84531
+	baseGoerliDevnetChainID = 11763071
+	devnetChainID           = 997
+	chaosnetChainID         = 888
 )
 
 // OP Stack chain config
@@ -43,6 +47,12 @@ var (
 	OptimismGoerliRegolithTime = uint64(1679079600)
 	// May 4, 2023 @ 5:00:00 pm UTC
 	BaseGoerliRegolithTime = uint64(1683219600)
+	// Apr 21, 2023 @ 6:30:00 pm UTC
+	baseGoerliDevnetRegolithTime = uint64(1682101800)
+	// March 5, 2023 @ 2:48:00 am UTC
+	devnetRegolithTime = uint64(1677984480)
+	// August 16, 2023 @ 3:34:22 am UTC
+	chaosnetRegolithTime = uint64(1692156862)
 )
 
 func newUint64(val uint64) *uint64 { return &val }
@@ -94,8 +104,7 @@ var (
 		TerminalTotalDifficulty:       big.NewInt(0),
 		TerminalTotalDifficultyPassed: true,
 		MergeNetsplitBlock:            nil,
-		ShanghaiTime:                  newUint64(1694790240),
-		CancunTime:                    newUint64(2000000000),
+		ShanghaiTime:                  newUint64(1696000704),
 		Ethash:                        new(EthashConfig),
 	}
 	// SepoliaChainConfig contains the chain parameters to run a node on the Sepolia test network.
@@ -229,7 +238,7 @@ var (
 	}
 
 	// TestChainConfig contains every protocol change (EIPs) introduced
-	// and accepted by the Ethereum core developers for testing proposes.
+	// and accepted by the Ethereum core developers for testing purposes.
 	TestChainConfig = &ChainConfig{
 		ChainID:                       big.NewInt(1),
 		HomesteadBlock:                big.NewInt(0),
@@ -390,8 +399,9 @@ func (c *CliqueConfig) String() string {
 
 // OptimismConfig is the optimism config.
 type OptimismConfig struct {
-	EIP1559Elasticity  uint64 `json:"eip1559Elasticity"`
-	EIP1559Denominator uint64 `json:"eip1559Denominator"`
+	EIP1559Elasticity        uint64 `json:"eip1559Elasticity"`
+	EIP1559Denominator       uint64 `json:"eip1559Denominator"`
+	EIP1559DenominatorCanyon uint64 `json:"eip1559DenominatorCanyon"`
 }
 
 // String implements the stringer interface, returning the optimism fee config details.
@@ -442,6 +452,9 @@ func (c *ChainConfig) Description() string {
 		}
 	default:
 		banner += "Consensus: unknown\n"
+	}
+	if c.Shutter != nil {
+		banner += "MEV-Protection: Shutter\n"
 	}
 	banner += "\n"
 
@@ -504,6 +517,9 @@ func (c *ChainConfig) Description() string {
 	}
 	if c.RegolithTime != nil {
 		banner += fmt.Sprintf(" - Regolith:                    @%-10v\n", *c.RegolithTime)
+	}
+	if c.CanyonTime != nil {
+		banner += fmt.Sprintf(" - Canyon:                      @%-10v\n", *c.CanyonTime)
 	}
 	return banner
 }
@@ -634,6 +650,7 @@ func (c *ChainConfig) IsOptimismBedrock(num *big.Int) bool {
 func (c *ChainConfig) IsOptimismRegolith(time uint64) bool {
 	return c.IsOptimism() && c.IsRegolith(time)
 }
+
 func (c *ChainConfig) IsOptimismCanyon(time uint64) bool {
 	return c.IsOptimism() && c.IsCanyon(time)
 }
@@ -813,8 +830,12 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 }
 
 // BaseFeeChangeDenominator bounds the amount the base fee can change between blocks.
-func (c *ChainConfig) BaseFeeChangeDenominator() uint64 {
+// The time parameters is the timestamp of the block to determine if Canyon is active or not
+func (c *ChainConfig) BaseFeeChangeDenominator(time uint64) uint64 {
 	if c.Optimism != nil {
+		if c.IsCanyon(time) {
+			return c.Optimism.EIP1559DenominatorCanyon
+		}
 		return c.Optimism.EIP1559Denominator
 	}
 	return DefaultBaseFeeChangeDenominator

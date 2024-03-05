@@ -17,9 +17,11 @@
 package miner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -27,6 +29,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
@@ -79,6 +82,18 @@ var (
 	errBlockInterruptedByNewHead  = errors.New("new head arrived while building block")
 	errBlockInterruptedByRecommit = errors.New("recommit interrupt while building block")
 	errBlockInterruptedByTimeout  = errors.New("timeout while building block")
+)
+
+func init() {
+	DeactivationDecryptionKey = make([]byte, 128)
+	for i := 0; i < len(DeactivationDecryptionKey); i++ {
+		DeactivationDecryptionKey[i] = math.MaxUint8
+	}
+}
+
+var (
+	ErrShutterStateInvalid    = errors.New("shutter state invalid")
+	DeactivationDecryptionKey []byte
 )
 
 // environment is the worker's current environment and holds all
@@ -265,8 +280,8 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
 	}
-	// Subscribe NewTxsEvent for tx pool
-	worker.txsSub = eth.TxPool().SubscribeNewTxsEvent(worker.txsCh)
+	// Subscribe for transaction insertion events (whether from network or resurrects)
+	worker.txsSub = eth.TxPool().SubscribeTransactions(worker.txsCh, true)
 	// Subscribe events for blockchain
 	worker.chainHeadSub = eth.BlockChain().SubscribeChainHeadEvent(worker.chainHeadCh)
 
@@ -572,11 +587,14 @@ func (w *worker) mainLoop() {
 				for _, tx := range ev.Txs {
 					acc, _ := types.Sender(w.current.signer, tx)
 					txs[acc] = append(txs[acc], &txpool.LazyTransaction{
+						Pool:      w.eth.TxPool(), // We don't know where this came from, yolo resolve from everywhere
 						Hash:      tx.Hash(),
-						Tx:        tx.WithoutBlobTxSidecar(),
+						Tx:        nil, // Do *not* set this! We need to resolve it later to pull blobs in
 						Time:      tx.Time(),
 						GasFeeCap: tx.GasFeeCap(),
 						GasTipCap: tx.GasTipCap(),
+						Gas:       tx.Gas(),
+						BlobGas:   tx.BlobGas(),
 					})
 				}
 				txset := newTransactionsByPriceAndNonce(w.current.signer, txs, w.current.header.BaseFee)
@@ -781,7 +799,6 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	if tx.Type() == types.BlobTxType {
 		return w.commitBlobTransaction(env, tx)
 	}
-
 	receipt, err := w.applyTransaction(env, tx)
 	if err != nil {
 		return nil, err
@@ -803,7 +820,6 @@ func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction) 
 	if (env.blobs+len(sc.Blobs))*params.BlobTxBlobGasPerBlob > params.MaxBlobGasPerBlock {
 		return nil, errors.New("max data blobs reached")
 	}
-
 	receipt, err := w.applyTransaction(env, tx)
 	if err != nil {
 		return nil, err
@@ -854,13 +870,24 @@ func (w *worker) commitTransactions(env *environment, txs *transactionsByPriceAn
 		if ltx == nil {
 			break
 		}
-		tx := ltx.Resolve()
-		if tx == nil {
-			log.Warn("Ignoring evicted transaction")
+		// If we don't have enough space for the next transaction, skip the account.
+		if env.gasPool.Gas() < ltx.Gas {
+			log.Trace("Not enough gas left for transaction", "hash", ltx.Hash, "left", env.gasPool.Gas(), "needed", ltx.Gas)
 			txs.Pop()
 			continue
 		}
-
+		if left := uint64(params.MaxBlobGasPerBlock - env.blobs*params.BlobTxBlobGasPerBlob); left < ltx.BlobGas {
+			log.Trace("Not enough blob gas left for transaction", "hash", ltx.Hash, "left", left, "needed", ltx.BlobGas)
+			txs.Pop()
+			continue
+		}
+		// Transaction seems to fit, pull it up from the pool
+		tx := ltx.Resolve()
+		if tx == nil {
+			log.Trace("Ignoring evicted transaction", "hash", ltx.Hash)
+			txs.Pop()
+			continue
+		}
 		// Error may be ignored here. The error has already been checked
 		// during transaction acceptance is the transaction pool.
 		from, _ := types.Sender(env.signer, tx)
@@ -868,11 +895,10 @@ func (w *worker) commitTransactions(env *environment, txs *transactionsByPriceAn
 		// Check whether the tx is replay protected. If we're not in the EIP155 hf
 		// phase, start ignoring the sender until we do.
 		if tx.Protected() && !w.chainConfig.IsEIP155(env.header.Number) {
-			log.Trace("Ignoring replay protected transaction", "hash", tx.Hash(), "eip155", w.chainConfig.EIP155Block)
+			log.Trace("Ignoring replay protected transaction", "hash", ltx.Hash, "eip155", w.chainConfig.EIP155Block)
 			txs.Pop()
 			continue
 		}
-
 		// Start executing the transaction
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 
@@ -880,7 +906,7 @@ func (w *worker) commitTransactions(env *environment, txs *transactionsByPriceAn
 		switch {
 		case errors.Is(err, core.ErrNonceTooLow):
 			// New head notification data race between the transaction pool and miner, shift
-			log.Trace("Skipping transaction with low nonce", "sender", from, "nonce", tx.Nonce())
+			log.Trace("Skipping transaction with low nonce", "hash", ltx.Hash, "sender", from, "nonce", tx.Nonce())
 			txs.Shift()
 
 		case errors.Is(err, nil):
@@ -892,7 +918,7 @@ func (w *worker) commitTransactions(env *environment, txs *transactionsByPriceAn
 		default:
 			// Transaction is regarded as invalid, drop all consecutive transactions from
 			// the same sender because of `nonce-too-high` clause.
-			log.Debug("Transaction failed, account skipped", "hash", tx.Hash(), "err", err)
+			log.Debug("Transaction failed, account skipped", "hash", ltx.Hash, "err", err)
 			txs.Pop()
 		}
 	}
@@ -927,6 +953,9 @@ type generateParams struct {
 
 	txs      types.Transactions // Deposit transactions to include at the start of the block
 	gasLimit *uint64            // Optional gas limit override
+
+	shutterActive bool
+	decryptionKey *[]byte // Optional shutter 128 byte decryption key. Max value as special value for shutter deactivation.
 }
 
 // prepareWork constructs the sealing task according to the given parameters,
@@ -972,7 +1001,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	}
 	// Set baseFee and GasLimit if we are on an EIP-1559 chain
 	if w.chainConfig.IsLondon(header.Number) {
-		header.BaseFee = eip1559.CalcBaseFee(w.chainConfig, parent)
+		header.BaseFee = eip1559.CalcBaseFee(w.chainConfig, parent, header.Time)
 		if !w.chainConfig.IsLondon(parent.Number) {
 			parentGasLimit := parent.GasLimit * w.chainConfig.ElasticityMultiplier()
 			header.GasLimit = core.CalcGasLimit(parentGasLimit, w.config.GasCeil)
@@ -1010,6 +1039,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		log.Error("Failed to create sealing context", "err", err)
 		return nil, err
 	}
+
 	if header.ParentBeaconRoot != nil {
 		context := core.NewEVMBlockContext(header, w.chain, nil, w.chainConfig, env.state)
 		vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, w.chainConfig, vm.Config{})
@@ -1049,6 +1079,61 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	return nil
 }
 
+func (w *worker) generateWorkShutter(work *environment, decryptionKey *[]byte) error {
+	context := core.NewEVMBlockContext(work.header, w.chain, nil, w.chainConfig, work.state)
+	vmenv := vm.NewEVM(context, vm.TxContext{}, work.state, w.chainConfig, vm.Config{})
+	enabled, err := core.IsShutterEnabled(vmenv)
+	if err != nil {
+		// those are errors in querying the EVM
+		log.Error("Failed to query Shutter state", "err", err)
+		return err
+	}
+	log.Info("Shutter state", "enabled", enabled)
+
+	// FIXME: will the decryption key actually get translated from decoding to nil, or is this the null value?
+	if !enabled {
+		if decryptionKey != nil {
+			// disabled, but the consensus client sent a key.
+			// we could ignore it, but this means something
+			// might be wrong with the client.
+			return ErrShutterStateInvalid
+		}
+		return nil
+	}
+	// shutter is enabled
+
+	if decryptionKey == nil {
+		// the consensus client assumed an incorrect state
+		log.Error("Mismatched Shutter state", "enabled", enabled)
+		return ErrShutterStateInvalid
+	}
+
+	revealTx := &types.RevealTx{
+		Key: []byte{},
+	}
+	if bytes.Compare(*decryptionKey, DeactivationDecryptionKey) != 0 {
+		// the node does NOT want to disable shutter
+		// FIXME: that's how its encoded - is the decoding correct?
+		// hexKey := hexutil.Bytes(key.SecretKey.Marshal())
+		// attrs.DecryptionKey = &hexKey
+		revealTx.Key = *decryptionKey
+		// TODO: OPTIMIZATION - also verify the correctness of the key in order to fail early
+	} else {
+		// this is a noop, because the RevealTx.Key null value will
+		// disable shutter in the STF at this point
+		log.Info("Shutter disable requested from EngineAPI payload")
+	}
+
+	tx := types.NewTx(revealTx)
+	work.state.SetTxContext(tx.Hash(), work.tcount)
+	_, err = w.commitTransaction(work, tx)
+	if err != nil {
+		return fmt.Errorf("failed to include reveal tx: %s type: %d, err: %w", tx.Hash(), tx.Type(), err)
+	}
+	work.tcount++
+	return nil
+}
+
 // generateWork generates a sealing block based on the given parameters.
 func (w *worker) generateWork(genParams *generateParams) *newPayloadResult {
 	work, err := w.prepareWork(genParams)
@@ -1058,6 +1143,16 @@ func (w *worker) generateWork(genParams *generateParams) *newPayloadResult {
 	defer work.discard()
 	if work.gasPool == nil {
 		work.gasPool = new(core.GasPool).AddGas(work.header.GasLimit)
+	}
+
+	misc.EnsureCreate2Deployer(w.chainConfig, work.header.Time, work.state)
+
+	// XXX: check wether a nil or null value is decoded
+	// to the genParams decryptionKey field.
+	// We need NIL to properly function in this method:
+	err = w.generateWorkShutter(work, genParams.decryptionKey)
+	if err != nil {
+		return &newPayloadResult{err: err}
 	}
 
 	for _, tx := range genParams.txs {
