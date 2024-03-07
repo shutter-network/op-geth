@@ -41,24 +41,33 @@ func (tx *EncryptedTransaction) GetDecryptedTransaction(decryptionKey *shcrypto.
 	msg := new(shcrypto.EncryptedMessage)
 	err := msg.Unmarshal(tx.EncryptedTransaction)
 	if err != nil {
+		fmt.Printf("encrypted tx unmarshal failed (1)\n")
+		fmt.Printf("%X\n", tx.EncryptedTransaction)
 		return nil, err
 	}
 
 	decryptedBytes, err := msg.Decrypt(decryptionKey)
 	if err != nil {
+		fmt.Printf("decryption failed (2)\n")
+		fmt.Printf("%X\n", msg.Marshal())
 		return nil, err
 	}
 
 	if len(decryptedBytes) == 0 {
+		fmt.Printf("empty decrypted message (3)\n")
 		return nil, fmt.Errorf("decrypted tx is empty")
 	}
 	if decryptedBytes[0] != 0 {
+		fmt.Printf("wrong version byte (4)\n")
+		fmt.Printf("%X\n", decryptedBytes)
 		return nil, fmt.Errorf("decrypted tx has invalid version prefix %d", decryptedBytes[0])
 	}
 
 	decryptedTx := new(DecryptedTransaction)
 	err = rlp.DecodeBytes(decryptedBytes[1:], decryptedTx)
 	if err != nil {
+		fmt.Printf("rlp decoding failed (5)\n")
+		fmt.Printf("%X\n", decryptedBytes)
 		return nil, err
 	}
 	return decryptedTx, nil
